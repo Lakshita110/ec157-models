@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py --version)",
+      "Bash(/c/Python313/python.exe plot_indexed.py)",
+      "Bash(/c/Python313/python.exe -m pip install matplotlib pandas --quiet)"
+    ]
+  }
+}
