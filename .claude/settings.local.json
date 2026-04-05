@@ -3,7 +3,28 @@
     "allow": [
       "Bash(py --version)",
       "Bash(/c/Python313/python.exe plot_indexed.py)",
-      "Bash(/c/Python313/python.exe -m pip install matplotlib pandas --quiet)"
+      "Bash(/c/Python313/python.exe -m pip install matplotlib pandas --quiet)",
+      "Bash(/c/Python313/python.exe -c \":*)",
+      "Bash(/c/Python313/python.exe comps_table.py)",
+      "Bash(/c/Python313/python.exe kvue_price_chart.py)",
+      "Bash(/c/Python313/python.exe comps_multiples_chart.py)",
+      "Bash(/c/Python313/python.exe comps_render.py)",
+      "Bash(sed -i 's|comps_snapshot\\\\.csv|output/comps_snapshot.csv|g; s|comps_discount\\\\.csv|output/comps_discount.csv|g' comps_table.py)",
+      "Bash(sed -i 's|comps_snapshot\\\\.csv|output/comps_snapshot.csv|g; s|comps_discount\\\\.csv|output/comps_discount.csv|g; s|comps_table_render\\\\.png|output/comps_table_render.png|g' comps_render.py)",
+      "Bash(sed -i 's|\"kvue_price\\\\.png\"|\"output/kvue_price.png\"|g; s|\"kvue_comparison\\\\.png\"|\"output/kvue_comparison.png\"|g' kvue_price_chart.py)",
+      "Bash(sed -i 's|fig.savefig\\(\"output/comps_table_render|import os; os.makedirs\\(\"output\", exist_ok=True\\)\\\\nfig.savefig\\(\"output/comps_table_render|' comps_render.py)",
+      "Bash(sed -i 's|fig1.savefig\\(\"output/kvue_price|import os; os.makedirs\\(\"output\", exist_ok=True\\)\\\\nfig1.savefig\\(\"output/kvue_price|' kvue_price_chart.py)",
+      "Bash(ls \"c:/Users/lakja/OneDrive - Tufts/University/Spring 26/EC157/Models/\"*.xlsx)",
+      "Bash(/c/Python313/python.exe -m pip install openpyxl --quiet)",
+      "Bash(/c/Python313/python.exe -c ':*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('csv_to_visual.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(mv kvue_price_chart.py price_and_peer_comparison_charts.py)",
+      "Bash(mv kvue_q3_2025_slide.py q3_2025_earnings_slide.py)",
+      "Bash(mv simple_workbook_builder.py comps_table_renderer.py)",
+      "Bash(mv \"PitchBook_Formula_Comps_Model_v2_summary_fixed.xlsx\" comps_model.xlsx)",
+      "Bash(mv kvue_price_cache.csv peer_price_cache.csv)",
+      "Bash(sed -i 's/kvue_price_cache\\\\.csv/peer_price_cache.csv/' price_and_peer_comparison_charts.py)",
+      "Bash(sed -i 's/PitchBook_Formula_Comps_Model_v2_summary_fixed\\\\.xlsx/comps_model.xlsx/' comps_table_renderer.py)"
     ]
   }
 }
