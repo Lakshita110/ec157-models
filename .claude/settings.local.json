@@ -24,7 +24,13 @@
       "Bash(mv \"PitchBook_Formula_Comps_Model_v2_summary_fixed.xlsx\" comps_model.xlsx)",
       "Bash(mv kvue_price_cache.csv peer_price_cache.csv)",
       "Bash(sed -i 's/kvue_price_cache\\\\.csv/peer_price_cache.csv/' price_and_peer_comparison_charts.py)",
-      "Bash(sed -i 's/PitchBook_Formula_Comps_Model_v2_summary_fixed\\\\.xlsx/comps_model.xlsx/' comps_table_renderer.py)"
+      "Bash(sed -i 's/PitchBook_Formula_Comps_Model_v2_summary_fixed\\\\.xlsx/comps_model.xlsx/' comps_table_renderer.py)",
+      "Bash(python -c ':*)",
+      "Bash(where python:*)",
+      "Bash(C:/Python313/python.exe comps_table_renderer.py)",
+      "Bash(C:/Python313/python.exe -c ':*)",
+      "Bash(C:/Python313/python.exe kvue_fundamental_charts.py)",
+      "Bash(C:/Python313/python.exe kvue_performance_comparison.py)"
     ]
   }
 }

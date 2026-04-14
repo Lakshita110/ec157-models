@@ -32,11 +32,7 @@ ROW_ALT     = "#f0f4f9"
 DISC_NEG    = "#c0392b"
 DISC_POS    = "#27ae60"
 
-_available = {f.name for f in font_manager.fontManager.ttflist}
-for _font in ["Poppins", "Didact Gothic", "Arial", "Helvetica"]:
-    if _font in _available:
-        plt.rcParams["font.family"] = _font
-        break
+plt.rcParams["font.family"] = "Didact Gothic"
 
 # ── Load workbook ──────────────────────────────────────────────────────────────
 WORKBOOK = "comps_model.xlsx"
@@ -263,21 +259,21 @@ for co in COMPANIES:
         for c in ev_cols: peer_ev_vals[c].append(float(row[c]))
         for c in pe_cols: peer_pe_vals[c].append(float(row[c]))
 
-# Peer median
-med_ev = [f"{np.median(peer_ev_vals[c]):.1f}×" for c in ev_cols]
-med_pe = [f"{np.median(peer_pe_vals[c]):.1f}×" for c in pe_cols]
+# Peer mean
+med_ev = [f"{np.mean(peer_ev_vals[c]):.1f}×" for c in ev_cols]
+med_pe = [f"{np.mean(peer_pe_vals[c]):.1f}×" for c in pe_cols]
 col_data_m.append(med_ev + med_pe)
-row_labels_m.append("Peer Median")
+row_labels_m.append("Peer Mean")
 row_types_m.append("median")
 
-# KVUE discount
+# KVUE discount vs mean
 kvue_row = summ.loc["Kenvue"]
-med_ev_f = [np.median(peer_ev_vals[c]) for c in ev_cols]
-med_pe_f = [np.median(peer_pe_vals[c]) for c in pe_cols]
+med_ev_f = [np.mean(peer_ev_vals[c]) for c in ev_cols]
+med_pe_f = [np.mean(peer_pe_vals[c]) for c in pe_cols]
 disc_ev  = [disc_fmt(kvue_row[c], m) for c, m in zip(ev_cols, med_ev_f)]
 disc_pe  = [disc_fmt(kvue_row[c], m) for c, m in zip(pe_cols, med_pe_f)]
 col_data_m.append(disc_ev + disc_pe)
-row_labels_m.append("KVUE vs. Peer Median")
+row_labels_m.append("KVUE vs. Peer Mean")
 row_types_m.append("disc")
 
 draw_table(
@@ -289,7 +285,7 @@ draw_table(
     title        = "Kenvue vs. US Consumer-Health Peers  —  Trading Multiples",
     subtitle     = "EV/EBITDA and Forward P/E at three snapshot dates  |  Source: PitchBook",
     footnote     = "NTM = next twelve months.  Peer Median excludes Kenvue.  "
-                   "Discount = KVUE multiple / Peer Median − 1.",
+                   "Discount = KVUE multiple / Peer Mean − 1.",
     group_sizes  = [3, 3],
     out_path     = "output/table_multiples.png",
     col_widths   = [2.8] + [1.05] * 6,
@@ -366,4 +362,89 @@ draw_table(
     group_sizes  = [3, 3, 3],
     out_path     = "output/table_financials.png",
     col_widths   = [2.8] + [1.15] * 9,
+)
+
+# ── Table 2b — Financial Performance (May snapshots only) ─────────────────────
+MAY_SNAPS = ["IPO (May '23)"]
+
+col_headers_may = ["Revenue\nMay '23", "EBITDA\nMay '23", "Margin\nMay '23"]
+
+row_labels_may, row_types_may, col_data_may = [], [], []
+for co in COMPANIES:
+    rtype = "kvue" if co == "Kenvue" else "peer"
+    df = sheets["IPO (May '23)"]
+    row = df[df["Company"] == co]
+    if row.empty:
+        vals = ["—", "—", "—"]
+    else:
+        row = row.iloc[0]
+        rev    = row.get("Revenue TTM", np.nan)
+        ebitda = row.get("EBITDA TTM",  np.nan)
+        vals   = [fmt_rev(rev), fmt_ebitda(ebitda), fmt_margin(ebitda, rev)]
+    col_data_may.append(vals)
+    row_labels_may.append(co)
+    row_types_may.append(rtype)
+
+draw_table(
+    col_data     = col_data_may,
+    col_headers  = col_headers_may,
+    group_headers= [("IPO  —  May 2023", 3)],
+    row_labels   = row_labels_may,
+    row_types    = row_types_may,
+    title        = "Kenvue vs. US Consumer-Health Peers  —  Financial Performance",
+    subtitle     = "Revenue and EBITDA (TTM) at IPO  |  Source: PitchBook",
+    footnote     = "Revenue and EBITDA shown in USD millions (TTM = trailing twelve months).  "
+                   "Margin = EBITDA / Revenue.",
+    group_sizes  = [3],
+    out_path     = "output/table_financials_may.png",
+    col_widths   = [2.8] + [1.15] * 3,
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Table 3 — EV/EBITDA peer comparison across all snapshots
+# ══════════════════════════════════════════════════════════════════════════════
+col_headers_ev = ["IPO\nMay '23", "1-yr\nMay '24", "Pre-Deal\nOct '25"]
+
+row_labels_ev, row_types_ev, col_data_ev = [], [], []
+peer_ev_by_snap = {c: [] for c in ev_cols}
+
+for co in COMPANIES:
+    rtype = "kvue" if co == "Kenvue" else "peer"
+    row   = summ.loc[co]
+    vals  = [fmt_mult(row[c]) for c in ev_cols]
+    col_data_ev.append(vals)
+    row_labels_ev.append(co)
+    row_types_ev.append(rtype)
+    if co != "Kenvue":
+        for c in ev_cols:
+            peer_ev_by_snap[c].append(float(row[c]))
+
+# Peer mean row
+mean_ev = [f"{np.mean(peer_ev_by_snap[c]):.1f}×" for c in ev_cols]
+col_data_ev.append(mean_ev)
+row_labels_ev.append("Peer Mean")
+row_types_ev.append("median")
+
+# KVUE vs mean
+kvue_ev = summ.loc["Kenvue"]
+mean_ev_f = [np.mean(peer_ev_by_snap[c]) for c in ev_cols]
+disc_ev_only = [disc_fmt(kvue_ev[c], m) for c, m in zip(ev_cols, mean_ev_f)]
+col_data_ev.append(disc_ev_only)
+row_labels_ev.append("KVUE vs. Peer Mean")
+row_types_ev.append("disc")
+
+draw_table(
+    col_data     = col_data_ev,
+    col_headers  = col_headers_ev,
+    group_headers= [("EV / EBITDA (NTM)", 3)],
+    row_labels   = row_labels_ev,
+    row_types    = row_types_ev,
+    title        = "Kenvue vs. US Consumer-Health Peers  —  EV / EBITDA",
+    subtitle     = "NTM EV/EBITDA at three snapshot dates  |  Source: PitchBook",
+    footnote     = "NTM = next twelve months.  Peer Mean excludes Kenvue.  "
+                   "Discount = KVUE multiple / Peer Mean − 1.",
+    group_sizes  = [3],
+    out_path     = "output/table_ev_ebitda.png",
+    col_widths   = [5.0] + [2.5] * 3,
 )

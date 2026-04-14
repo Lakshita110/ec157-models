@@ -18,9 +18,9 @@ import matplotlib.patches as mpatches
 import seaborn as sns
 
 # ── Data ───────────────────────────────────────────────────────────────────────
-TICKERS    = ["KVUE", "PG", "KMB", "CL", "CHD", "SPY"]
-WIN_START  = "2024-05-04"
-WIN_END    = "2025-12-31"
+TICKERS    = ["KVUE", "KMB"]
+WIN_START  = "2025-10-26"
+WIN_END    = "2025-12-30"
 
 CACHE = "peer_price_cache.csv"
 import os
@@ -46,14 +46,6 @@ print(f"  {len(prices)} trading days  ({prices.index[0].date()} – {prices.inde
 
 # ── Events ─────────────────────────────────────────────────────────────────────
 ALL_EVENTS = {
-    "2023-08-18": "Exchange offer closes",
-    "2023-08-25": "Added to S&P 500",
-    "2025-03-05": "Starboard\nboard seats",
-    "2025-07-14": "CEO fired",
-    "2025-09-05": "RFK autism\nreport",
-    "2025-09-22": "Trump/FDA\nannouncement",
-    "2025-10-03": "Moody's\noutlook cut",
-    "2025-11-02": "KMB deal\nannounced",
 }
 
 # Only keep events that fall within the window
@@ -103,7 +95,7 @@ for i, (d, lbl) in enumerate(events.items()):
              bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.8))
 
 ax1.set_title(
-    "Kenvue (KVUE) — Share Price  |  May 2023 – Nov 2025",
+    "Kenvue (KVUE) — Share Price  |  Apr 2025 - Dec 2025",
     fontsize=13, fontweight="bold",
 )
 ax1.set_ylabel("Share Price (USD)")
@@ -123,15 +115,17 @@ print("Saved kvue_price.png")
 # ══════════════════════════════════════════════════════════════════════════════
 # Chart 2 – Indexed comparison (base = 100 on KVUE IPO date 2023-05-04)
 # ══════════════════════════════════════════════════════════════════════════════
-# Rebase each ticker from its own price on the IPO date (first valid day >= it)
-BASE_DATE = pd.Timestamp("2023-05-04")
-indexed   = pd.DataFrame(index=prices.index)
+# Rebase on the full history so the IPO-date base price is available,
+# then slice to the Oct–Dec 2025 plot window.
+BASE_DATE   = pd.Timestamp("2025-10-26")
+indexed_all = pd.DataFrame(index=raw.index)
 for t in TICKERS:
-    first_valid = prices[t].loc[prices.index >= BASE_DATE].dropna()
+    first_valid = raw[t].loc[raw.index >= BASE_DATE].dropna()
     if len(first_valid):
-        indexed[t] = prices[t] / first_valid.iloc[0] * 100
+        indexed_all[t] = raw[t] / first_valid.iloc[0] * 100
     else:
-        indexed[t] = np.nan
+        indexed_all[t] = np.nan
+indexed = indexed_all.loc[WIN_START:WIN_END].copy()
 
 fig2, ax2 = plt.subplots(figsize=(13, 5))
 
@@ -160,7 +154,7 @@ for i, (d, lbl) in enumerate(events.items()):
              bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.8))
 
 ax2.set_title(
-    "KVUE vs Consumer-Health Peers & S&P 500 — Rebased to 100 on 2023-05-04 (IPO)",
+    "KVUE vs KMB — Rebased to 100 on 2025-10-26 (~1 Week Pre-Announcement)",
     fontsize=13, fontweight="bold",
 )
 ax2.set_ylabel("Indexed Price (Base = 100)")
