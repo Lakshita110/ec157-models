@@ -17,6 +17,7 @@ from datetime import date
 from vesper.agent.loop import RunReport, Toolbox, run_agent
 from vesper.config import MAX_TOOL_CALLS
 from vesper.schemas import (
+    CheckIn,
     ExerciseStep,
     GarminToday,
     HistoryFeatures,
@@ -95,6 +96,7 @@ def run_scenario(sc: Scenario) -> tuple[RunReport, list[str]]:
     tools = Toolbox(
         get_garmin_today=lambda day: sc.garmin,
         get_notion_logs=lambda day: sc.notion,
+        get_checkin=lambda day: CheckIn(for_date=day),
         query_history=lambda day: sc.features,
         research_training=fake_research,
         compose_session=lambda for_date, *a, **kw: sane_session(for_date),

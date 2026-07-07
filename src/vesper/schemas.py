@@ -45,6 +45,24 @@ class NotionDay(BaseModel):
     tomorrow_tasks: list[str] = []
 
 
+class CheckIn(BaseModel):
+    """The athlete's own input for a target day: what they want, how they feel,
+    where they'll be. Read from the Notion 'training check-in' DB and folded
+    into the compose context. All fields optional — a blank check-in is fine."""
+
+    for_date: date
+    note: str = ""  # free text: preferences, active pain, constraints
+    focus: str = ""  # upper / lower / full body / conditioning / pt only / rest
+    location: str = ""  # gym / home — drives the PT variant
+    minutes: int | None = None  # time available
+    energy: str = ""  # low / normal / high
+
+    def is_empty(self) -> bool:
+        return not any(
+            [self.note, self.focus, self.location, self.minutes, self.energy]
+        )
+
+
 class HistoryFeatures(BaseModel):
     """Deterministic features over a trailing window. Pure SQL/Python, no LLM."""
 

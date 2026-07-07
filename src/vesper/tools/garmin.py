@@ -11,10 +11,13 @@ passes on a real device."""
 
 import logging
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from vesper.config import settings
 from vesper.schemas import ActivitySummary, GarminToday, StructuredSession, WorkoutRef
+
+if TYPE_CHECKING:
+    from vesper.playbook import WorkoutTemplate
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +80,7 @@ def get_garmin_today(day: date) -> GarminToday:
 # first match wins, so specific entries go before generic ones.
 EXERCISE_TAXONOMY: tuple[tuple[str, str, str | None], ...] = (
     ("goblet squat", "SQUAT", "GOBLET_SQUAT"),
+    ("balancing squat", "SQUAT", "BALANCING_SQUAT"),
     ("squat", "SQUAT", None),
     ("romanian deadlift", "DEADLIFT", "ROMANIAN_DEADLIFT"),
     ("deadlift", "DEADLIFT", None),
@@ -91,6 +95,14 @@ EXERCISE_TAXONOMY: tuple[tuple[str, str, str | None], ...] = (
     ("pull up", "PULL_UP", None),
     ("push-up", "PUSH_UP", None),
     ("push up", "PUSH_UP", None),
+    # PT-oriented enums confirmed present on the account's PT Routine
+    ("clamshell", "BANDED_EXERCISES", "CLAM_SHELLS"),
+    ("clam shell", "BANDED_EXERCISES", "CLAM_SHELLS"),
+    ("glute bridge", "BANDED_EXERCISES", "GLUTE_BRIDGE"),
+    ("dead bug", "HIP_STABILITY", "DEAD_BUG"),
+    ("prone hip internal rotation", "HIP_STABILITY", "PRONE_HIP_INTERNAL_ROTATION"),
+    ("single-leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
+    ("single leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
 )
 
 
@@ -102,70 +114,133 @@ def classify_garmin_exercise(name: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def build_strength_payload(session: StructuredSession) -> dict[str, Any]:
-    """Best-guess Garmin workout-API JSON for a strength session (M1 unknown).
+SPORT_TYPES: dict[str, dict[str, Any]] = {
+    "strength": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+    "strength_training": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
+    "mobility": {"sportTypeId": 11, "sportTypeKey": "mobility"},
+    "conditioning": {"sportTypeId": 11, "sportTypeKey": "mobility"},
+}
 
-    Cardio has typed helpers in garminconnect; strength needs a hand-built
-    payload. Verify against a real account and update docs/garmin_strength.md."""
+
+def _emit_step(
+    order: int,
+    *,
+    name: str,
+    sets: int,
+    reps: int | None,
+    time_sec: int | None,
+    weight_kg: float | None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Build one executable step (wrapped in a RepeatGroupDTO when sets>1),
+    encoding the hard-won Garmin quirks (see docs/garmin_strength.md).
+
+    Condition type IDs: 2 = time, 7 = iterations, 10 = reps — numeric id is
+    mandatory; the value goes in step-level endConditionValue."""
+    if reps:
+        end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
+        end_value: float = reps
+    else:
+        end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
+        end_value = time_sec or 60
+    entry: dict[str, Any] = {
+        "type": "ExecutableStepDTO",
+        "stepOrder": order,
+        "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
+        "endCondition": end_condition,
+        "endConditionValue": end_value,
+        "description": name,
+    }
+    order += 1
+    if weight_kg is not None:
+        entry["weightValue"] = weight_kg
+        entry["weightUnit"] = {"unitKey": "kilogram"}
+    category, exercise_name = classify_garmin_exercise(name)
+    if category:
+        entry["category"] = category
+    if exercise_name:
+        entry["exerciseName"] = exercise_name
+
+    if sets > 1:
+        group = {
+            "type": "RepeatGroupDTO",
+            "stepOrder": entry["stepOrder"],
+            "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
+            "numberOfIterations": sets,
+            "smartRepeat": False,
+            "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
+            "endConditionValue": sets,
+            "workoutSteps": [{**entry, "stepOrder": order}],
+        }
+        order += 1
+        return [group], order
+    return [entry], order
+
+
+def _wrap_payload(name: str, sport_key: str, steps: list[dict[str, Any]]) -> dict[str, Any]:
+    sport = SPORT_TYPES.get(sport_key, SPORT_TYPES["strength"])
+    return {
+        "workoutName": name,
+        "sportType": sport,
+        "workoutSegments": [
+            {"segmentOrder": 1, "sportType": sport, "workoutSteps": steps}
+        ],
+    }
+
+
+def build_strength_payload(session: StructuredSession) -> dict[str, Any]:
+    """Garmin workout-API JSON for a composed session (verified schema)."""
     steps: list[dict[str, Any]] = []
     order = 1
     for step in session.steps:
-        # Garmin condition type IDs: 2 = time, 7 = iterations, 10 = reps.
-        # Numeric id is required ("Invalid WorkoutConditionTypeDTO id"), and
-        # the value goes in step-level endConditionValue — a value nested
-        # inside endCondition is silently dropped.
-        if step.reps:
-            end_condition = {"conditionTypeId": 10, "conditionTypeKey": "reps"}
-            end_value: float = step.reps
-        else:
-            end_condition = {"conditionTypeId": 2, "conditionTypeKey": "time"}
-            end_value = step.duration_sec or 60
-        entry: dict[str, Any] = {
-            "type": "ExecutableStepDTO",
-            "stepOrder": order,
-            "stepType": {"stepTypeId": 3, "stepTypeKey": "interval"},
-            "endCondition": end_condition,
-            "endConditionValue": end_value,
-            "description": step.exercise,
-        }
-        order += 1
-        if step.weight_kg is not None:
-            entry["weightValue"] = step.weight_kg
-            entry["weightUnit"] = {"unitKey": "kilogram"}
-        category, exercise_name = classify_garmin_exercise(step.exercise)
-        if category:
-            entry["category"] = category
-        if exercise_name:
-            entry["exerciseName"] = exercise_name
+        emitted, order = _emit_step(
+            order,
+            name=step.exercise,
+            sets=step.sets,
+            reps=step.reps,
+            time_sec=step.duration_sec,
+            weight_kg=step.weight_kg,
+        )
+        steps.extend(emitted)
+    return _wrap_payload(session.title, "strength", steps)
 
-        if step.sets > 1:
-            # Sets are modeled as a repeat group around the exercise step, not
-            # a field on it (numberOfIterations on an executable step is dropped).
+
+def build_template_payload(template: "WorkoutTemplate") -> dict[str, Any]:
+    """Garmin workout-API JSON for a playbook template (warmup + all blocks).
+
+    Block-level `sets` (strength supersets) wrap the whole block in a repeat;
+    exercise-level `sets` wrap a single move. Used to materialize PT/base
+    routines that don't yet exist as Garmin workouts (e.g. home PT)."""
+    steps: list[dict[str, Any]] = []
+    order = 1
+    for ex in template.warmup:
+        emitted, order = _emit_step(
+            order, name=ex.name, sets=ex.sets or 1, reps=ex.reps,
+            time_sec=ex.time_sec, weight_kg=None,
+        )
+        steps.extend(emitted)
+    for block in template.blocks:
+        block_steps: list[dict[str, Any]] = []
+        for ex in block.exercises:
+            emitted, order = _emit_step(
+                order, name=ex.name, sets=ex.sets or 1, reps=ex.reps,
+                time_sec=ex.time_sec, weight_kg=None,
+            )
+            block_steps.extend(emitted)
+        if block.sets and block.sets > 1:
             group = {
                 "type": "RepeatGroupDTO",
-                "stepOrder": entry["stepOrder"],
+                "stepOrder": block_steps[0]["stepOrder"],
                 "stepType": {"stepTypeId": 6, "stepTypeKey": "repeat"},
-                "numberOfIterations": step.sets,
+                "numberOfIterations": block.sets,
                 "smartRepeat": False,
                 "endCondition": {"conditionTypeId": 7, "conditionTypeKey": "iterations"},
-                "endConditionValue": step.sets,
-                "workoutSteps": [{**entry, "stepOrder": order}],
+                "endConditionValue": block.sets,
+                "workoutSteps": block_steps,
             }
-            order += 1
             steps.append(group)
         else:
-            steps.append(entry)
-    return {
-        "workoutName": session.title,
-        "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-        "workoutSegments": [
-            {
-                "segmentOrder": 1,
-                "sportType": {"sportTypeId": 5, "sportTypeKey": "strength_training"},
-                "workoutSteps": steps,
-            }
-        ],
-    }
+            steps.extend(block_steps)
+    return _wrap_payload(template.label, template.sport, steps)
 
 
 def create_garmin_workout(session: StructuredSession) -> WorkoutRef:

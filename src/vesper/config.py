@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # --- PLAN.md §8 constants -------------------------------------------------
 MODEL_FAST = "openai/gpt-4o-mini"  # cheap OpenRouter tier — default agent + compose
 MODEL_QUALITY = "anthropic/claude-sonnet-4"  # escalation only, on ambiguous state
-MAX_TOOL_CALLS = 8  # hard cap per nightly run
+MAX_TOOL_CALLS = 10  # hard cap per nightly run (reads + gated research + compose ×2)
 RESEARCH_ENABLED = True  # gated behind off-heuristic regardless
 AUTO_PUSH = False  # propose-only until M5 evals pass
 CRON_LOCAL_HOUR = 21
@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     notion_knee_log_db_id: str = "b872f62a28604573980e983be6fd3143"
     notion_tasks_db_id: str = "6843311f33194f40b65ea7e7c0f47436"
     notion_proposal_db_id: str = "67d2cfc3c75442c4b373736ad38b1cda"
+    notion_checkin_db_id: str = "b789621918c74bd58568eec9218aeb4c"
 
     openrouter_api_key: str = ""
     tavily_api_key: str = ""

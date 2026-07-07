@@ -6,6 +6,7 @@ import pytest
 
 from vesper.agent.loop import Toolbox, ToolBudgetExceeded, run_agent
 from vesper.schemas import (
+    CheckIn,
     ExerciseStep,
     GarminToday,
     HistoryFeatures,
@@ -33,12 +34,15 @@ def sane_session(for_date, **overrides) -> StructuredSession:
 class Recorder:
     """Fake toolbox that records every call for assertions."""
 
-    def __init__(self, garmin=None, notion=None, features=None, compose_outputs=None):
+    def __init__(
+        self, garmin=None, notion=None, features=None, compose_outputs=None, checkin=None
+    ):
         self.calls: list[str] = []
         self.written = None
         self.recorded = None
         self._garmin = garmin or GarminToday(day=TODAY, readiness=70, body_battery=60)
         self._notion = notion or NotionDay(day=TODAY, pain_level=1, pt_done=True)
+        self._checkin = checkin or CheckIn(for_date=TOMORROW)
         self._features = features or HistoryFeatures(
             as_of=TODAY, window_days=28, weekly_volume_min=200, days_since_legs=3
         )
@@ -64,6 +68,7 @@ class Recorder:
         return Toolbox(
             get_garmin_today=lambda d: (self.calls.append("garmin"), self._garmin)[1],
             get_notion_logs=lambda d: (self.calls.append("notion"), self._notion)[1],
+            get_checkin=lambda d: (self.calls.append("checkin"), self._checkin)[1],
             query_history=lambda d: (self.calls.append("history"), self._features)[1],
             research_training=lambda q, k=5: (
                 self.calls.append("research"),
@@ -83,7 +88,9 @@ def test_routine_night_skips_research_and_proposes():
     rec = Recorder()
     report = run_agent(TODAY, tools=rec.toolbox())
     assert "research" not in rec.calls
-    assert rec.calls == ["garmin", "notion", "history", "compose", "write_notion", "record"]
+    assert rec.calls == [
+        "garmin", "notion", "history", "checkin", "compose", "write_notion", "record",
+    ]
     assert report.suggestion_id == 42
     assert report.tier == "fast"
     assert not report.fell_back
@@ -131,6 +138,24 @@ def test_tool_budget_is_enforced():
     rec = Recorder()
     with pytest.raises(ToolBudgetExceeded):
         run_agent(TODAY, tools=rec.toolbox(), max_tool_calls=2)
+
+
+def test_checkin_is_read_for_tomorrow_and_passed_to_compose():
+    seen = {}
+
+    def compose(for_date, *a, **kw):
+        seen["checkin"] = kw.get("checkin")
+        return sane_session(TOMORROW)
+
+    rec = Recorder(checkin=CheckIn(for_date=TOMORROW, focus="upper", location="home", minutes=30))
+    tb = rec.toolbox()
+    tb.compose_session = compose
+    checkin_days: list = []
+    tb.get_checkin = lambda d: (checkin_days.append(d), rec._checkin)[1]
+    run_agent(TODAY, tools=tb)
+    assert checkin_days == [TOMORROW]  # check-in is for the target day, not today
+    assert seen["checkin"].focus == "upper"
+    assert seen["checkin"].location == "home"
 
 
 def test_base_template_schedules_by_id_without_rebuild(monkeypatch):

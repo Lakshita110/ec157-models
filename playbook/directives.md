@@ -24,11 +24,23 @@ as rules, above its own judgement, below the hard safety guardrail in code.
 
 ## PT days — home vs gym
 
-- **Default to gym PT** on weekdays (bands, machines, bike/rower available).
-- Use **home PT** on weekends, or when tomorrow's tasks/travel mean no gym.
-- If you can't tell where I'll be, pick home PT — it needs the least equipment.
+- If tomorrow's **check-in** sets a location, use it (home → `pt_home`,
+  gym → `pt_gym`). The check-in always wins.
+- Otherwise default to **gym PT** on weekdays, **home PT** on weekends or when
+  tomorrow's tasks/travel mean no gym.
+- If you still can't tell, pick home PT — it needs the least equipment.
 - Always keep the ★ priority exercise (ankle eversion) in; it's the driver for
   the lateral ankle pain.
+
+## The check-in (my input for tomorrow)
+
+- Read the `training check-in` row dated for the target day. It carries my
+  stated focus, active pain points, location, minutes available, and a
+  free-text note. Treat it as a strong preference and honor it unless it breaks
+  a hard rule or the pain guardrail — then follow the rule and tell me why.
+- If minutes are given, fit the session to that budget (trim accessory work,
+  keep the priority + iso-anchor moves).
+- No check-in = decide from recovery, pain, and the rotation as usual.
 
 ## Pain & flare rules (from PT — do not override)
 

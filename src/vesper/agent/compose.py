@@ -15,6 +15,7 @@ from vesper.config import (
     OPENROUTER_BASE_URL,
 )
 from vesper.schemas import (
+    CheckIn,
     GarminToday,
     HistoryFeatures,
     NotionDay,
@@ -31,6 +32,12 @@ when you do, copy its garmin_workout_id and template_key into your response and
 leave `steps` empty (the existing Garmin workout will be scheduled as-is, with
 its loaded weights). Only hand-build `steps` when pain/recovery forces you to
 adapt or substitute.
+
+You may also be given the athlete's CHECK-IN for tomorrow — their own stated
+focus, active pain points, location (home/gym → pick the matching PT routine),
+time available, and a free-text note. Treat the check-in as a strong preference:
+honor it unless it conflicts with the hard rules or the pain guardrail, in which
+case follow the rules and say why in rationale_summary.
 
 Hard rules (never violate; the playbook directives sit below these):
 - Never program: {forbidden}.
@@ -55,6 +62,7 @@ def build_user_prompt(
     research: list[ResearchHit],
     revision_feedback: list[str] | None = None,
     playbook_text: str = "",
+    checkin: CheckIn | None = None,
 ) -> str:
     parts = [
         f"Propose the session for {for_date.isoformat()}.",
@@ -62,6 +70,9 @@ def build_user_prompt(
         f"Today (log): {notion.model_dump_json()}",
         f"History features: {features.model_dump_json()}",
     ]
+    if checkin is not None and not checkin.is_empty():
+        parts.append("# CHECK-IN (athlete's stated preference for tomorrow)\n"
+                     + checkin.model_dump_json())
     if playbook_text:
         parts.append("# PLAYBOOK\n" + playbook_text)
     if research:
@@ -86,6 +97,7 @@ def compose_session(
     model: str,
     revision_feedback: list[str] | None = None,
     playbook_text: str = "",
+    checkin: CheckIn | None = None,
 ) -> StructuredSession:
     from openai import OpenAI
 
@@ -106,7 +118,7 @@ def compose_session(
                 "role": "user",
                 "content": build_user_prompt(
                     for_date, garmin, notion, features, research,
-                    revision_feedback, playbook_text,
+                    revision_feedback, playbook_text, checkin,
                 ),
             },
         ],

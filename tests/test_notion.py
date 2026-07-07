@@ -60,3 +60,33 @@ def test_parse_task_page():
     }
     assert parse_task_page(page) == "PT appointment"
     assert parse_task_page({"properties": {}}) == ""
+
+
+def test_parse_checkin_page():
+    from vesper.tools.notion import parse_checkin_page
+
+    page = {
+        "properties": {
+            "note": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "knee flaring, keep it light"}],
+            },
+            "focus": {"type": "select", "select": {"name": "upper"}},
+            "location": {"type": "select", "select": {"name": "home"}},
+            "minutes": {"type": "number", "number": 30},
+            "energy": {"type": "select", "select": {"name": "low"}},
+        }
+    }
+    ci = parse_checkin_page(page, DAY)
+    assert ci.note == "knee flaring, keep it light"
+    assert ci.focus == "upper"
+    assert ci.location == "home"
+    assert ci.minutes == 30
+    assert ci.energy == "low"
+    assert not ci.is_empty()
+
+
+def test_empty_checkin_is_empty():
+    from vesper.tools.notion import parse_checkin_page
+
+    assert parse_checkin_page({"properties": {}}, DAY).is_empty()

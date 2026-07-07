@@ -77,3 +77,22 @@ def test_taxonomy_prefers_specific_match():
     assert classify_garmin_exercise("Back squat") == ("SQUAT", None)
     assert classify_garmin_exercise("Romanian Deadlift") == ("DEADLIFT", "ROMANIAN_DEADLIFT")
     assert classify_garmin_exercise("mystery move") == (None, None)
+
+
+def test_build_template_payload_from_playbook_home_pt():
+    from vesper.playbook import load_playbook
+    from vesper.tools.garmin import build_template_payload
+
+    home = load_playbook().pt_routines["pt_home"]
+    payload = build_template_payload(home)
+    assert payload["sportType"]["sportTypeKey"] == "mobility"
+    steps = payload["workoutSegments"][0]["workoutSteps"]
+    # warmup (single, flat) + several exercises, multi-set ones wrapped in repeats
+    assert any(s["type"] == "RepeatGroupDTO" for s in steps)
+    # priority ankle eversion is present (by description) and repeated 3x
+    everts = [
+        s for s in steps
+        if s.get("type") == "RepeatGroupDTO"
+        and "eversion" in s["workoutSteps"][0]["description"].lower()
+    ]
+    assert everts and everts[0]["numberOfIterations"] == 3

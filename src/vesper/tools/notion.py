@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from vesper.config import settings
-from vesper.schemas import NotionDay, StructuredSession
+from vesper.schemas import CheckIn, NotionDay, StructuredSession
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +114,29 @@ def parse_knee_log_page(page: dict[str, Any], day: date) -> NotionDay:
 
 def parse_task_page(page: dict[str, Any]) -> str:
     return _text(page, PROP_TASK_TITLE)
+
+
+def parse_checkin_page(page: dict[str, Any], day: date) -> CheckIn:
+    minutes = _number(page, "minutes")
+    return CheckIn(
+        for_date=day,
+        note=_text(page, "note"),
+        focus=_text(page, "focus"),
+        location=_text(page, "location"),
+        minutes=int(minutes) if minutes is not None else None,
+        energy=_text(page, "energy"),
+    )
+
+
+def get_checkin(day: date) -> CheckIn:
+    """The athlete's own input for `day` (empty CheckIn if none was written)."""
+    cfg = settings()
+    rows = client().databases.query(
+        database_id=cfg.notion_checkin_db_id,
+        filter={"property": "date", "date": {"equals": day.isoformat()}},
+        page_size=1,
+    ).get("results", [])
+    return parse_checkin_page(rows[0], day) if rows else CheckIn(for_date=day)
 
 
 # --- tool contracts (PLAN.md §7) -------------------------------------------

@@ -13,8 +13,8 @@ def test_base_workouts_carry_garmin_ids():
     assert pb.workouts["full_body_a"].garmin_workout_id == "1414012813"
     assert pb.workouts["full_body_b"].garmin_workout_id == "1414015802"
     assert pb.workouts["full_body_c"].garmin_workout_id == "1414019198"
-    # home PT has no Garmin workout yet; gym PT reuses the existing one
-    assert pb.pt_routines["pt_home"].garmin_workout_id is None
+    # both PT routines now exist on Garmin (home PT created for auto-push)
+    assert pb.pt_routines["pt_home"].garmin_workout_id == "1624611562"
     assert pb.pt_routines["pt_gym"].garmin_workout_id == "1414026633"
 
 

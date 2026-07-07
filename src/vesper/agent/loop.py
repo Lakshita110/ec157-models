@@ -38,6 +38,7 @@ class Toolbox:
 
     get_garmin_today: Callable[..., Any]
     get_notion_logs: Callable[..., Any]
+    get_checkin: Callable[..., Any]
     query_history: Callable[..., Any]
     research_training: Callable[..., list[ResearchHit]]
     compose_session: Callable[..., StructuredSession]
@@ -53,6 +54,7 @@ class Toolbox:
         return cls(
             get_garmin_today=garmin.get_garmin_today,
             get_notion_logs=notion.get_notion_logs,
+            get_checkin=notion.get_checkin,
             query_history=history.query_history,
             research_training=research.research_training,
             compose_session=compose.compose_session,
@@ -102,6 +104,8 @@ def run_agent(
     garmin_today = call(tools.get_garmin_today, today)
     notion_day = call(tools.get_notion_logs, today)
     features = call(tools.query_history, today)
+    # The athlete's own input for tomorrow (empty CheckIn if none written).
+    checkin = call(tools.get_checkin, tomorrow)
 
     # 4. Gated research: only when the deterministic heuristic says something's off.
     report.off_reasons = heuristics.something_off(garmin_today, notion_day, features)
@@ -124,7 +128,7 @@ def run_agent(
     playbook_text = playbook.to_prompt()
     session = call(
         tools.compose_session, tomorrow, garmin_today, notion_day, features, research,
-        model=model, playbook_text=playbook_text,
+        model=model, playbook_text=playbook_text, checkin=checkin,
     )
     result = validate.validate(session, features)
     if not result.ok:
@@ -132,7 +136,7 @@ def run_agent(
         session = call(
             tools.compose_session, tomorrow, garmin_today, notion_day, features,
             research, model=model, revision_feedback=result.violations,
-            playbook_text=playbook_text,
+            playbook_text=playbook_text, checkin=checkin,
         )
         result = validate.validate(session, features)
     if not result.ok:

@@ -10,6 +10,7 @@ Discovered from the live workspace on 2026-07-07. IDs are defaulted in
 | Knee+Habit log | `habits db` (under the `habits` page) | `b872f62a28604573980e983be6fd3143` |
 | Tasks | `tasks ` (note trailing space in title) | `6843311f33194f40b65ea7e7c0f47436` |
 | Proposals | `training proposals` (created 2026-07-07, under `habits`) | `67d2cfc3c75442c4b373736ad38b1cda` |
+| Check-in | `training check-in` (created 2026-07-07, under `habits`) | `b789621918c74bd58568eec9218aeb4c` |
 
 `My Tasks` also exists in the workspace but is an empty shell (no data source)
 — ignore it.
@@ -42,8 +43,17 @@ mobility/rest), `status` (select: proposed/approved/rejected/pushed),
 morning approval flips them to `approved`, and auto-push (post-M5) will mark
 `pushed`. Plan steps + rationale go in the page body.
 
+## training check-in properties
+
+`name` (title), `date` (target training day), `note` (rich text — free-form
+preferences/pain), `focus` (select: no preference/upper/lower/full body/
+conditioning/pt only/rest), `location` (select: gym/home), `minutes` (number),
+`energy` (select: low/normal/high). The nightly run reads the row dated
+*tomorrow*; all fields optional. Home vs gym `location` selects the PT variant.
+
 ## Remaining runtime setup
 
 The agent hits the official Notion API with `NOTION_TOKEN`. Create an internal
-integration at notion.so/my-integrations, then share **all three databases**
-with it (⋯ menu → Connections). Without the share, queries 404.
+integration at notion.so/my-integrations, then share **all four databases**
+(knee log, tasks, proposals, check-in) with it (⋯ menu → Connections). Without
+the share, queries 404.

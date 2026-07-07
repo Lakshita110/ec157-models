@@ -32,6 +32,25 @@ Editing rules of thumb:
 - Tags the agent honors: `priority` (never drop — the ★ ankle eversion),
   `skip_on_flare`, `iso_anchor`; `equipment` drives the home-vs-gym choice.
 
+## 1b. Check-in — your input for tomorrow (Notion)
+
+The `training check-in` Notion database is how you tell the agent what you want
+for a *specific* upcoming day (as opposed to `directives.md`, which is standing
+policy). Add a row dated for the target day with any of:
+
+| Field | Use |
+|---|---|
+| `note` (free text) | preferences, active pain points, anything — the agent reads it verbatim |
+| `focus` | upper / lower / full body / conditioning / pt only / rest |
+| `location` | home / gym — picks the PT variant, overrides the weekday default |
+| `minutes` | time budget; the agent trims to fit |
+| `energy` | low / normal / high |
+
+The nightly run reads the row dated *tomorrow* and folds it into the compose
+context as a strong preference (honored unless it breaks a hard rule or the pain
+guardrail). Everything's optional — a blank or missing check-in just means
+"decide for me." There's a seeded example row you can edit or delete.
+
 ## 2. Episodic memory — what actually happened (Postgres)
 
 `suggestions` + `outcomes` (PLAN.md §6). Each night's proposal is recorded; the
@@ -47,8 +66,8 @@ weight/exercise data, so "schedule Full Body B" reuses the real thing.
 ## Quick "how do I…"
 
 - **Tell the agent a standing rule** → edit `playbook/directives.md`.
+- **Tell it about a specific day** (pain, focus, home/gym, time) → add a
+  `training check-in` row in Notion dated for that day.
 - **Change a base workout** → edit it on Garmin, mirror reps in
   `base_workouts.yaml`.
 - **Add/adjust a PT routine** → edit `pt_routines.yaml`.
-- **One-off ("skip tomorrow")** → add a line to `directives.md` and remove it
-  after; there's no per-day override channel yet (could be a Notion field later).
