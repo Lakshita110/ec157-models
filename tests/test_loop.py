@@ -1,0 +1,133 @@
+"""Agent loop tests with an injected fake toolbox — no live APIs (PLAN.md §13)."""
+
+from datetime import date, timedelta
+
+import pytest
+
+from vesper.agent.loop import Toolbox, ToolBudgetExceeded, run_agent
+from vesper.schemas import (
+    ExerciseStep,
+    GarminToday,
+    HistoryFeatures,
+    NotionDay,
+    ResearchHit,
+    StructuredSession,
+)
+
+TODAY = date(2026, 7, 6)
+TOMORROW = TODAY + timedelta(days=1)
+
+
+def sane_session(for_date, **overrides) -> StructuredSession:
+    base = StructuredSession(
+        for_date=for_date,
+        kind="strength",
+        title="Upper push",
+        steps=[ExerciseStep(exercise="Bench press", sets=3, reps=8)],
+        est_duration_min=45,
+        rationale_summary="push day",
+    )
+    return base.model_copy(update=overrides)
+
+
+class Recorder:
+    """Fake toolbox that records every call for assertions."""
+
+    def __init__(self, garmin=None, notion=None, features=None, compose_outputs=None):
+        self.calls: list[str] = []
+        self.written = None
+        self.recorded = None
+        self._garmin = garmin or GarminToday(day=TODAY, readiness=70, body_battery=60)
+        self._notion = notion or NotionDay(day=TODAY, pain_level=1, pt_done=True)
+        self._features = features or HistoryFeatures(
+            as_of=TODAY, window_days=28, weekly_volume_min=200, days_since_legs=3
+        )
+        self._compose_outputs = compose_outputs or [sane_session(TOMORROW)]
+        self._compose_i = 0
+
+    def toolbox(self) -> Toolbox:
+        def compose(for_date, *a, **kw):
+            self.calls.append("compose")
+            out = self._compose_outputs[min(self._compose_i, len(self._compose_outputs) - 1)]
+            self._compose_i += 1
+            return out
+
+        def write_notion(for_date, plan, rationale):
+            self.calls.append("write_notion")
+            self.written = (for_date, plan, rationale)
+
+        def record(for_date, plan, rationale, research_used, tier):
+            self.calls.append("record")
+            self.recorded = (for_date, plan, research_used, tier)
+            return 42
+
+        return Toolbox(
+            get_garmin_today=lambda d: (self.calls.append("garmin"), self._garmin)[1],
+            get_notion_logs=lambda d: (self.calls.append("notion"), self._notion)[1],
+            query_history=lambda d: (self.calls.append("history"), self._features)[1],
+            research_training=lambda q, k=5: (
+                self.calls.append("research"),
+                [ResearchHit(source="corpus", title="t", snippet="s")],
+            )[1],
+            compose_session=compose,
+            write_notion=write_notion,
+            record_suggestion=record,
+            create_garmin_workout=lambda s: (_ for _ in ()).throw(
+                AssertionError("must not push to Garmin in propose-only mode")
+            ),
+            schedule_workout=lambda *a: None,
+        )
+
+
+def test_routine_night_skips_research_and_proposes():
+    rec = Recorder()
+    report = run_agent(TODAY, tools=rec.toolbox())
+    assert "research" not in rec.calls
+    assert rec.calls == ["garmin", "notion", "history", "compose", "write_notion", "record"]
+    assert report.suggestion_id == 42
+    assert report.tier == "fast"
+    assert not report.fell_back
+    assert report.for_date == TOMORROW
+    assert rec.written[0] == TOMORROW
+
+
+def test_pain_spike_triggers_exactly_one_research_call():
+    rec = Recorder(notion=NotionDay(day=TODAY, pain_level=6, pt_done=True))
+    report = run_agent(TODAY, tools=rec.toolbox())
+    assert rec.calls.count("research") == 1
+    assert report.research_used
+    assert rec.recorded[2] is True  # research_used persisted
+
+
+def test_ambiguous_state_escalates_tier():
+    rec = Recorder(
+        garmin=GarminToday(day=TODAY, readiness=20, body_battery=10),
+        notion=NotionDay(day=TODAY, pain_level=6, pt_done=True),
+    )
+    report = run_agent(TODAY, tools=rec.toolbox())
+    assert report.tier == "quality"
+
+
+def test_invalid_proposal_gets_one_revision():
+    bad = sane_session(TOMORROW, steps=[ExerciseStep(exercise="Box jump", sets=3, reps=5)])
+    rec = Recorder(compose_outputs=[bad, sane_session(TOMORROW)])
+    report = run_agent(TODAY, tools=rec.toolbox())
+    assert rec.calls.count("compose") == 2
+    assert not report.fell_back
+    assert report.session.title == "Upper push"
+
+
+def test_double_rejection_falls_back_conservatively():
+    bad = sane_session(TOMORROW, steps=[ExerciseStep(exercise="Depth jump", sets=3, reps=5)])
+    rec = Recorder(compose_outputs=[bad, bad])
+    report = run_agent(TODAY, tools=rec.toolbox())
+    assert report.fell_back
+    assert report.session.kind == "mobility"
+    # the fallback still gets proposed + recorded
+    assert rec.written[1].kind == "mobility"
+
+
+def test_tool_budget_is_enforced():
+    rec = Recorder()
+    with pytest.raises(ToolBudgetExceeded):
+        run_agent(TODAY, tools=rec.toolbox(), max_tool_calls=2)

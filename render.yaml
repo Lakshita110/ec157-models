@@ -1,0 +1,53 @@
+# Render blueprint: thin web service + nightly agent + morning reconcile.
+# CRON SCHEDULES ARE UTC — adjust both cron lines if APP_TIMEZONE changes.
+# 21:00 America/New_York = 01:00/02:00 UTC depending on DST; 02:00 UTC chosen.
+services:
+  - type: web
+    name: vesper-web
+    runtime: python
+    buildCommand: pip install -e .
+    startCommand: uvicorn vesper.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - fromGroup: vesper-secrets
+
+  - type: cron
+    name: vesper-nightly
+    runtime: python
+    schedule: "0 2 * * *"   # ~21:00 America/New_York
+    buildCommand: pip install -e .
+    startCommand: python -m vesper.jobs.nightly
+    envVars:
+      - fromGroup: vesper-secrets
+
+  - type: cron
+    name: vesper-reconcile
+    runtime: python
+    schedule: "0 12 * * *"  # ~07:00-08:00 America/New_York
+    buildCommand: pip install -e .
+    startCommand: python -m vesper.jobs.reconcile
+    envVars:
+      - fromGroup: vesper-secrets
+
+envVarGroups:
+  - name: vesper-secrets
+    envVars:
+      - key: GARMIN_EMAIL
+        sync: false
+      - key: GARMIN_PASSWORD
+        sync: false
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_KNEE_LOG_DB_ID
+        sync: false
+      - key: NOTION_TASKS_DB_ID
+        sync: false
+      - key: NOTION_PROPOSAL_DB_ID
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_TIMEZONE
+        value: America/New_York

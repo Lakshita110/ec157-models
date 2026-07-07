@@ -1,0 +1,41 @@
+[project]
+name = "vesper"
+version = "0.1.0"
+description = "Nightly training agent: reviews the day (Garmin + Notion), proposes tomorrow's session, pushes structured workouts to Garmin on approval."
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "psycopg[binary]>=3.1",
+    "openai>=1.40",            # OpenRouter-compatible client (base_url override)
+    "garminconnect>=0.2.19",
+    "notion-client>=2.2",
+    "tavily-python>=0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

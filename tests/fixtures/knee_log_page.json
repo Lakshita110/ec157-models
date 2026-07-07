@@ -1,0 +1,16 @@
+{
+  "object": "page",
+  "id": "fixture-knee-log-page",
+  "properties": {
+    "Date": {"type": "date", "date": {"start": "2026-07-06"}},
+    "Pain Level": {"type": "number", "number": 4},
+    "Pain Location": {
+      "type": "select",
+      "select": {"name": "Left knee (medial)"}
+    },
+    "PT Done": {"type": "checkbox", "checkbox": true},
+    "Stretching": {"type": "checkbox", "checkbox": true},
+    "Reading": {"type": "checkbox", "checkbox": false},
+    "Day Score": {"type": "number", "number": 7}
+  }
+}
