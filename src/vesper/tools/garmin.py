@@ -21,6 +21,9 @@ log = logging.getLogger(__name__)
 _client: Any = None
 
 
+TOKEN_STORE = "~/.garminconnect"
+
+
 def client() -> Any:
     """Lazily authenticated Garmin client (cached tokens, re-login on expiry)."""
     global _client
@@ -29,7 +32,9 @@ def client() -> Any:
 
         cfg = settings()
         garmin = Garmin(cfg.garmin_email, cfg.garmin_password)
-        garmin.login()
+        # Loads cached tokens from TOKEN_STORE when present; otherwise does a
+        # full SSO login and dumps fresh tokens there.
+        garmin.login(TOKEN_STORE)
         _client = garmin
     return _client
 
