@@ -13,9 +13,9 @@ def test_base_workouts_carry_garmin_ids():
     assert pb.workouts["full_body_a"].garmin_workout_id == "1414012813"
     assert pb.workouts["full_body_b"].garmin_workout_id == "1414015802"
     assert pb.workouts["full_body_c"].garmin_workout_id == "1414019198"
-    # both PT routines now exist on Garmin (home PT created for auto-push)
-    assert pb.pt_routines["pt_home"].garmin_workout_id == "1624611562"
-    assert pb.pt_routines["pt_gym"].garmin_workout_id == "1414026633"
+    # both PT routines exist on Garmin with verified exercise enums
+    assert pb.pt_routines["pt_home"].garmin_workout_id == "1625297181"
+    assert pb.pt_routines["pt_gym"].garmin_workout_id == "1625297182"
 
 
 def test_rotation_cycles():

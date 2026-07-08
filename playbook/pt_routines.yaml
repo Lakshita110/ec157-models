@@ -10,7 +10,7 @@
 routines:
   pt_home:
     label: "PT Day · Home"
-    garmin_workout_id: "1624611562"
+    garmin_workout_id: "1625297181"
     sport: mobility
     equipment: [ankle weights, heavy small band, towel, chair, step, mat]
     warmup:
@@ -42,7 +42,7 @@ routines:
 
   pt_gym:
     label: "PT Day · Gym"
-    garmin_workout_id: "1414026633"
+    garmin_workout_id: "1625297182"
     sport: mobility
     equipment: [long band, small band, bike, rower, back extension machine, ladder anchor]
     warmup:

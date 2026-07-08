@@ -78,13 +78,64 @@ def get_garmin_today(day: date) -> GarminToday:
 # exerciseName). Unmapped movements omit category and rely on the description;
 # free-text categories are rejected with "Invalid category". Order matters:
 # first match wins, so specific entries go before generic ones.
+# Every (category, exerciseName) pair below is verified against Garmin's own
+# taxonomy (connect.garmin.com/web-data/exercises/Exercises.json) so steps
+# render with a proper exercise name/animation on-watch instead of falling
+# back to the free-text description. First match wins: specific before generic.
+# Some PT movements have no Garmin equivalent (e.g. ankle eversion) — the
+# nearest-name enum or a bare category is used so the step isn't "unknown".
 EXERCISE_TAXONOMY: tuple[tuple[str, str, str | None], ...] = (
+    # squat family
     ("goblet squat", "SQUAT", "GOBLET_SQUAT"),
     ("balancing squat", "SQUAT", "BALANCING_SQUAT"),
+    ("wall sit", "SQUAT", "BODY_WEIGHT_WALL_SQUAT"),
+    ("wall squat", "SQUAT", "BODY_WEIGHT_WALL_SQUAT"),
+    ("spanish squat", "SQUAT", "BODY_WEIGHT_WALL_SQUAT"),  # closest Garmin has
+    ("step-down", "SQUAT", "STEP_UP"),  # eccentric emphasis noted in description
+    ("step down", "SQUAT", "STEP_UP"),
+    ("step-up", "SQUAT", "DUMBBELL_STEP_UP"),
+    ("step up", "SQUAT", "DUMBBELL_STEP_UP"),
     ("squat", "SQUAT", None),
+    # hinge / posterior chain
     ("romanian deadlift", "DEADLIFT", "ROMANIAN_DEADLIFT"),
     ("deadlift", "DEADLIFT", None),
+    ("back extension", "BANDED_EXERCISES", "BACK_EXTENSION"),
+    ("good morning", "LEG_CURL", "GOOD_MORNING"),
+    # quad / knee rehab
+    ("terminal knee extension", "BANDED_EXERCISES", "LEG_EXTENSION"),
+    ("short arc quad", "CRUNCH", "LEG_EXTENSIONS"),  # account precedent for iso holds
+    ("straight-leg raise", "LEG_RAISE", "LYING_STRAIGHT_LEG_RAISE"),
+    ("straight leg raise", "LEG_RAISE", "LYING_STRAIGHT_LEG_RAISE"),
+    # hip
+    ("single-leg bridge", "HIP_RAISE", "SINGLE_LEG_HIP_RAISE"),
+    ("single leg bridge", "HIP_RAISE", "SINGLE_LEG_HIP_RAISE"),
+    ("glute bridge", "BANDED_EXERCISES", "GLUTE_BRIDGE"),
+    ("clamshell", "BANDED_EXERCISES", "CLAM_SHELLS"),
+    ("clam shell", "BANDED_EXERCISES", "CLAM_SHELLS"),
+    ("lateral band walk", "BANDED_EXERCISES", "LATERAL_BAND_WALKS"),
+    ("hip controlled articular", "HIP_STABILITY", "HIP_CIRCLES"),
+    ("hip circles", "HIP_STABILITY", "HIP_CIRCLES"),
+    ("dead bug", "HIP_STABILITY", "DEAD_BUG"),
+    ("prone hip internal rotation", "HIP_STABILITY", "PRONE_HIP_INTERNAL_ROTATION"),
+    ("single-leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
+    ("single leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
+    ("single-leg reach", "HIP_STABILITY", None),
+    ("single leg reach", "HIP_STABILITY", None),
+    # ankle / calf
+    ("seated toe raise", "CALF_RAISE", "SEATED_DUMBBELL_TOE_RAISE"),
+    ("dorsiflexion", "WARM_UP", "ANKLE_DORSIFLEXION_WITH_BAND"),
+    ("eccentric calf raise", "CALF_RAISE", "SINGLE_LEG_STANDING_CALF_RAISE"),
+    ("single-leg calf raise", "CALF_RAISE", "SINGLE_LEG_STANDING_CALF_RAISE"),
     ("calf raise", "CALF_RAISE", None),
+    ("eversion", "CALF_RAISE", None),  # Garmin has no eversion; keep the calf/ankle icon
+    ("ankle circles", "WARM_UP", "ANKLE_CIRCLES"),
+    ("seated marching", "WARM_UP", "ANKLE_CIRCLES"),
+    # stretches / cardio (before the generic "row" needle — "rower" contains it)
+    ("hip flexor stretch", "WARM_UP", "STRETCH_LUNGING_HIP_FLEXOR"),
+    ("bike", "CARDIO", None),
+    ("rower", "CARDIO", None),
+    ("cardio", "CARDIO", None),
+    # core / upper
     ("side plank", "PLANK", "SIDE_PLANK"),
     ("plank", "PLANK", None),
     ("lunge", "LUNGE", None),
@@ -95,14 +146,7 @@ EXERCISE_TAXONOMY: tuple[tuple[str, str, str | None], ...] = (
     ("pull up", "PULL_UP", None),
     ("push-up", "PUSH_UP", None),
     ("push up", "PUSH_UP", None),
-    # PT-oriented enums confirmed present on the account's PT Routine
-    ("clamshell", "BANDED_EXERCISES", "CLAM_SHELLS"),
-    ("clam shell", "BANDED_EXERCISES", "CLAM_SHELLS"),
-    ("glute bridge", "BANDED_EXERCISES", "GLUTE_BRIDGE"),
-    ("dead bug", "HIP_STABILITY", "DEAD_BUG"),
-    ("prone hip internal rotation", "HIP_STABILITY", "PRONE_HIP_INTERNAL_ROTATION"),
-    ("single-leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
-    ("single leg circles", "CORE", "SINGLE_LEG_CIRCLES"),
+    ("quad sets", "CRUNCH", "LEG_EXTENSIONS"),
 )
 
 
