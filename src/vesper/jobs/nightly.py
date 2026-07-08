@@ -54,10 +54,14 @@ def sync_today() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    from vesper.jobs.reconcile import reconcile_day
+
     with connect() as conn:
         migrate(conn)
     sync_today()
     today = datetime.now(ZoneInfo(settings().app_timezone)).date()
+    # Close today's loop first (session is done by 21:00), then plan tomorrow.
+    reconcile_day(today)
     report = run_agent(today)
     log.info("nightly done: %s", report)
 

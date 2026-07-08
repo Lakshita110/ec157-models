@@ -51,13 +51,12 @@ context as a strong preference (honored unless it breaks a hard rule or the pain
 guardrail). Everything's optional — a blank or missing check-in just means
 "decide for me." There's a seeded example row you can edit or delete.
 
-**Checking in the morning works too.** The morning job compares the check-in's
-Notion `last_edited_time` against last night's proposal: if you wrote or edited
-today's check-in *after* the nightly run (e.g. over coffee), it re-plans today
-around it — new proposal in Notion and, once auto-push is on, the day's stale
-schedule is swapped for the new one. A check-in the agent already saw last
-night doesn't trigger anything. Practical cutoff: the check-in must be in
-before the morning cron fires (see render.yaml; ~7-8am local by default).
+**The chat interface is the faster path for day-of changes** (docs/chat.md):
+message the agent any time and it re-plans immediately — no cron involved.
+Morning Notion check-ins are still supported via the *optional* morning job
+(`python -m vesper.jobs.reconcile`, not scheduled by default), which re-plans
+today when the check-in's `last_edited_time` is newer than the nightly
+proposal.
 
 ## 2. Episodic memory — what actually happened (Postgres)
 
@@ -74,8 +73,9 @@ weight/exercise data, so "schedule Full Body B" reuses the real thing.
 ## Quick "how do I…"
 
 - **Tell the agent a standing rule** → edit `playbook/directives.md`.
-- **Tell it about a specific day** (pain, focus, home/gym, time) → add a
-  `training check-in` row in Notion dated for that day.
+- **Tell it about a specific day** (pain, focus, home/gym, time) → message the
+  chat (docs/chat.md) — or add a `training check-in` row in Notion dated for
+  that day.
 - **Change a base workout** → edit it on Garmin, mirror reps in
   `base_workouts.yaml`.
 - **Add/adjust a PT routine** → edit `pt_routines.yaml`.

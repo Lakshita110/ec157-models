@@ -31,9 +31,10 @@ src/vesper/
     compose.py       # the one generative step: state -> StructuredSession JSON
     validate.py      # deterministic guardrail + conservative fallback
     loop.py          # run_agent: bounded, injectable toolbox
-  jobs/              # nightly run + morning reconcile (Render Cron entrypoints)
+  jobs/              # nightly run (single cron: reconcile + plan) + optional morning job
   playbook.py        # loads playbook/ (base workouts + PT + directives) into context
-  app.py             # thin FastAPI (health + manual trigger)
+  chat.py            # chat core: message -> check-in -> immediate re-plan
+  app.py             # thin FastAPI (health + manual trigger + /chat web chat)
 playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
 migrations/          # additive, idempotent SQL (PLAN §6)
 scripts/             # m1_roundtrip.py (live), backfill.py (live)

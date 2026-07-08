@@ -24,6 +24,7 @@ from vesper.schemas import ResearchHit, StructuredSession
 
 if TYPE_CHECKING:
     from vesper.playbook import Playbook
+    from vesper.schemas import CheckIn
 
 log = logging.getLogger(__name__)
 
@@ -83,9 +84,11 @@ def run_agent(
     max_tool_calls: int = MAX_TOOL_CALLS,
     playbook: "Playbook | None" = None,
     plan_for: date | None = None,
+    checkin: "CheckIn | None" = None,
 ) -> RunReport:
     """Plan the session for `plan_for` (default: tomorrow — the nightly run).
-    The morning re-plan passes plan_for=today when a late check-in arrives."""
+    The chat interface passes plan_for + its own `checkin` (built from the
+    message), which skips the Notion check-in read."""
     from vesper.playbook import load_playbook
 
     tools = tools or Toolbox.live()
@@ -107,8 +110,10 @@ def run_agent(
     garmin_today = call(tools.get_garmin_today, today)
     notion_day = call(tools.get_notion_logs, today)
     features = call(tools.query_history, today)
-    # The athlete's own input for the target day (empty CheckIn if none written).
-    checkin = call(tools.get_checkin, target)
+    # The athlete's own input for the target day: taken from the chat message
+    # when provided, otherwise read from Notion (empty CheckIn if none written).
+    if checkin is None:
+        checkin = call(tools.get_checkin, target)
 
     # 4. Gated research: only when the deterministic heuristic says something's off.
     report.off_reasons = heuristics.something_off(garmin_today, notion_day, features)

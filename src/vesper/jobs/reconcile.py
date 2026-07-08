@@ -1,9 +1,9 @@
-"""Morning job (Render Cron): two duties. First, reconcile — read yesterday's
-Garmin actuals and match them against the stored suggestion, writing `outcomes`
-(adherence). Second, re-plan — if a check-in for TODAY was written or edited
-after last night's proposal (i.e. the athlete checked in over morning coffee
-instead of the night before), run the agent again targeting today so the plan
-reflects it. `python -m vesper.jobs.reconcile`."""
+"""Reconciliation (`reconcile_day`, used by the nightly job) + an OPTIONAL
+morning job. `reconcile_day` matches a day's Garmin actuals against its stored
+suggestion, writing `outcomes` (adherence). The optional `main` additionally
+re-plans today when a Notion check-in was written after the nightly proposal —
+only needed if you use Notion morning check-ins instead of the chat interface.
+`python -m vesper.jobs.reconcile`."""
 
 import logging
 from datetime import date, datetime, timedelta
@@ -41,21 +41,22 @@ def adhered(plan: StructuredSession, actuals: list[ActivitySummary]) -> tuple[bo
     return True, f"matched {len(matches)} activity(ies), {total:.0f} min"
 
 
-def reconcile_yesterday(today: date) -> None:
+def reconcile_day(day: date) -> None:
+    """Match `day`'s Garmin actuals against its stored suggestion → outcomes.
+    The nightly job calls this for *today* (the session is done by 21:00)."""
     from vesper.tools.garmin import get_garmin_today
 
-    yesterday = today - timedelta(days=1)
     with connect() as conn:
         row = conn.execute(
             "SELECT id, plan FROM suggestions WHERE for_date = %s ORDER BY run_ts DESC LIMIT 1",
-            (yesterday,),
+            (day,),
         ).fetchone()
     if row is None:
-        log.info("no suggestion stored for %s; nothing to reconcile", yesterday)
+        log.info("no suggestion stored for %s; nothing to reconcile", day)
         return
 
     plan = StructuredSession.model_validate(row["plan"])
-    actuals = get_garmin_today(yesterday).activities
+    actuals = get_garmin_today(day).activities
     ok, notes = adhered(plan, actuals)
     record_outcome(
         suggestion_id=row["id"],
@@ -63,7 +64,7 @@ def reconcile_yesterday(today: date) -> None:
         adhered=ok,
         notes=notes,
     )
-    log.info("reconciled %s: adhered=%s (%s)", yesterday, ok, notes)
+    log.info("reconciled %s: adhered=%s (%s)", day, ok, notes)
 
 
 # --- morning re-plan: honor a check-in written after last night's proposal ---
@@ -109,9 +110,12 @@ def morning_replan(today: date) -> None:
 
 
 def main() -> None:
+    """OPTIONAL morning job. Not scheduled by default — reconciliation happens
+    in the nightly run, and same-day changes come through the chat interface.
+    Schedule this only if you prefer Notion morning check-ins over chat."""
     logging.basicConfig(level=logging.INFO)
     today = datetime.now(ZoneInfo(settings().app_timezone)).date()
-    reconcile_yesterday(today)
+    reconcile_day(today - timedelta(days=1))
     morning_replan(today)
 
 

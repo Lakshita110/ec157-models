@@ -1,5 +1,7 @@
-# Render blueprint: thin web service + nightly agent + morning reconcile.
-# CRON SCHEDULES ARE UTC — adjust both cron lines if APP_TIMEZONE changes.
+# Render blueprint: thin web service (health + chat) + ONE nightly cron.
+# The nightly job reconciles today's adherence AND plans tomorrow; same-day
+# changes come through the chat interface (docs/chat.md), so no morning cron.
+# CRON SCHEDULE IS UTC — adjust if APP_TIMEZONE changes.
 # 21:00 America/New_York = 01:00/02:00 UTC depending on DST; 02:00 UTC chosen.
 services:
   - type: web
@@ -16,18 +18,6 @@ services:
     schedule: "0 2 * * *"   # ~21:00 America/New_York
     buildCommand: pip install -e .
     startCommand: python -m vesper.jobs.nightly
-    envVars:
-      - fromGroup: vesper-secrets
-
-  # Morning job: reconciles yesterday's adherence AND re-plans today if a
-  # check-in was written after the nightly run. Morning check-ins must land
-  # before this fires — push the schedule later if you check in later.
-  - type: cron
-    name: vesper-reconcile
-    runtime: python
-    schedule: "0 12 * * *"  # ~07:00-08:00 America/New_York
-    buildCommand: pip install -e .
-    startCommand: python -m vesper.jobs.reconcile
     envVars:
       - fromGroup: vesper-secrets
 
@@ -54,3 +44,5 @@ envVarGroups:
         sync: false
       - key: APP_TIMEZONE
         value: America/New_York
+      - key: CHAT_SECRET
+        sync: false

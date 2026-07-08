@@ -13,6 +13,9 @@ MAX_TOOL_CALLS = 10  # hard cap per nightly run (reads + gated research + compos
 RESEARCH_ENABLED = True  # gated behind off-heuristic regardless
 AUTO_PUSH = False  # propose-only until M5 evals pass
 CRON_LOCAL_HOUR = 21
+# Chat messages before this local hour re-plan TODAY; later ones are treated as
+# a check-in for tomorrow (overridable with a leading "today"/"tomorrow").
+CHAT_TODAY_CUTOFF_HOUR = 15
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -52,6 +55,10 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     tavily_api_key: str = ""
+
+    # Shared secret for the built-in web chat (docs/chat.md). Chat is disabled
+    # until this is set; pick a long random string.
+    chat_secret: str = ""
 
     database_url: str = ""
     app_timezone: str = "America/New_York"
