@@ -2,8 +2,10 @@
 the deterministic feature computation lives in tools/history.py as pure
 functions so it can be unit-tested without a database."""
 
+import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -17,6 +19,23 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations"
 
 def connect() -> psycopg.Connection:
     return psycopg.connect(settings().database_url, row_factory=dict_row)
+
+
+def kv_get(key: str) -> Any:
+    """Read a value from the kv store (None if absent)."""
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM kv WHERE key = %s", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def kv_set(key: str, value: Any) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO kv (key, value, updated_ts) VALUES (%s, %s, now())"
+            " ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_ts = now()",
+            (key, json.dumps(value)),
+        )
+        conn.commit()
 
 
 def migrate(conn: psycopg.Connection) -> None:

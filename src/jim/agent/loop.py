@@ -2,7 +2,10 @@
 
 Single-shot, hard-capped on tool calls. Deterministic Python decides *whether*
 to research and *which* tier to use; the LLM is only generative at the compose
-step. Propose-only in v1: AUTO_PUSH gates the Garmin write behind M5 evals.
+step. Propose-only: the proposal lands as the chat DRAFT (kv) for review in
+Jim's chat — AUTO_PUSH gates any unattended Garmin write behind M5 evals.
+If the athlete already planned the target date in chat, the nightly run
+steps aside.
 
 Tools are injected so the loop unit-tests with fakes (no live APIs in CI)."""
 
@@ -24,7 +27,6 @@ from jim.schemas import ResearchHit, StructuredSession
 
 if TYPE_CHECKING:
     from jim.playbook import Playbook
-    from jim.schemas import CheckIn
 
 log = logging.getLogger(__name__)
 
@@ -39,28 +41,31 @@ class Toolbox:
 
     get_garmin_today: Callable[..., Any]
     get_notion_logs: Callable[..., Any]
-    get_checkin: Callable[..., Any]
     query_history: Callable[..., Any]
     research_training: Callable[..., list[ResearchHit]]
     compose_session: Callable[..., StructuredSession]
-    write_notion: Callable[..., None]
+    save_draft: Callable[..., None]  # proposal -> chat draft (kv)
     record_suggestion: Callable[..., int]
+    chat_planned: Callable[..., bool]  # date already planned via chat?
+    load_goals: Callable[[], str]  # long-term goals block (kv)
     create_garmin_workout: Callable[..., Any]
     schedule_workout: Callable[..., None]
 
     @classmethod
     def live(cls) -> "Toolbox":
+        from jim.db import kv_get, kv_set
         from jim.tools import garmin, history, memory, notion, research
 
         return cls(
             get_garmin_today=garmin.get_garmin_today,
             get_notion_logs=notion.get_notion_logs,
-            get_checkin=notion.get_checkin,
             query_history=history.query_history,
             research_training=research.research_training,
             compose_session=compose.compose_session,
-            write_notion=notion.write_notion,
+            save_draft=lambda sessions: kv_set("draft", sessions),
             record_suggestion=memory.record_suggestion,
+            chat_planned=memory.chat_planned,
+            load_goals=lambda: kv_get("goals") or "",
             create_garmin_workout=garmin.create_garmin_workout,
             schedule_workout=garmin.schedule_workout,
         )
@@ -76,6 +81,7 @@ class RunReport:
     off_reasons: list[str] = field(default_factory=list)
     tool_calls: int = 0
     fell_back: bool = False
+    skipped: bool = False  # target date was already planned in chat
 
 
 def run_agent(
@@ -84,11 +90,8 @@ def run_agent(
     max_tool_calls: int = MAX_TOOL_CALLS,
     playbook: "Playbook | None" = None,
     plan_for: date | None = None,
-    checkin: "CheckIn | None" = None,
 ) -> RunReport:
-    """Plan the session for `plan_for` (default: tomorrow — the nightly run).
-    The chat interface passes plan_for + its own `checkin` (built from the
-    message), which skips the Notion check-in read."""
+    """Plan the session for `plan_for` (default: tomorrow — the nightly run)."""
     from jim.playbook import load_playbook
 
     tools = tools or Toolbox.live()
@@ -106,14 +109,17 @@ def run_agent(
         report.tool_calls = calls
         return fn(*args, **kwargs)
 
+    # 0. The athlete's own chat-approved plan always wins.
+    if call(tools.chat_planned, target):
+        log.info("%s already planned via chat — nightly run steps aside", target)
+        report.skipped = True
+        return report
+
     # 1-3. Reads: everything the model will see, as compact summaries.
     garmin_today = call(tools.get_garmin_today, today)
     notion_day = call(tools.get_notion_logs, today)
     features = call(tools.query_history, today)
-    # The athlete's own input for the target day: taken from the chat message
-    # when provided, otherwise read from Notion (empty CheckIn if none written).
-    if checkin is None:
-        checkin = call(tools.get_checkin, target)
+    goals_text = call(tools.load_goals)
 
     # 4. Gated research: only when the deterministic heuristic says something's off.
     report.off_reasons = heuristics.something_off(garmin_today, notion_day, features)
@@ -132,11 +138,11 @@ def run_agent(
         report.tier = "quality"
     log.info("composing on %s (off: %s)", model, report.off_reasons or "nothing")
 
-    # 5-6. Compose (playbook in context), guardrail with one revision, then fallback.
+    # 5-6. Compose (playbook + goals in context), guardrail + one revision, fallback.
     playbook_text = playbook.to_prompt()
     session = call(
         tools.compose_session, target, garmin_today, notion_day, features, research,
-        model=model, playbook_text=playbook_text, checkin=checkin,
+        model=model, playbook_text=playbook_text, goals_text=goals_text,
     )
     result = validate.validate(session, features)
     if not result.ok:
@@ -144,7 +150,7 @@ def run_agent(
         session = call(
             tools.compose_session, target, garmin_today, notion_day, features,
             research, model=model, revision_feedback=result.violations,
-            playbook_text=playbook_text, checkin=checkin,
+            playbook_text=playbook_text, goals_text=goals_text,
         )
         result = validate.validate(session, features)
     if not result.ok:
@@ -153,17 +159,17 @@ def run_agent(
         report.fell_back = True
     report.session = session
 
-    # 7-8. Propose to Notion + remember what we suggested.
+    # 7-8. Propose as the chat draft + remember what we suggested.
     rationale = session.rationale_summary
     if report.off_reasons:
         rationale += f" [flags: {'; '.join(report.off_reasons)}]"
-    call(tools.write_notion, target, session, rationale, research_used=report.research_used)
+    call(tools.save_draft, [session.model_dump(mode="json")])
     report.suggestion_id = call(
         tools.record_suggestion, target, session, rationale,
         report.research_used, report.tier,
     )
 
-    # Auto-push stays off until the M5 eval suite gates it green.
+    # Unattended auto-push stays off until the M5 eval suite gates it green.
     if AUTO_PUSH and session.kind != "rest" and not report.fell_back:
         if session.garmin_workout_id:
             # Base template selected unchanged: schedule the existing Garmin

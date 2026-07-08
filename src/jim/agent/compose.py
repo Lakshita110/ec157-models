@@ -15,7 +15,6 @@ from jim.config import (
     OPENROUTER_BASE_URL,
 )
 from jim.schemas import (
-    CheckIn,
     GarminToday,
     HistoryFeatures,
     NotionDay,
@@ -33,11 +32,9 @@ leave `steps` empty (the existing Garmin workout will be scheduled as-is, with
 its loaded weights). Only hand-build `steps` when pain/recovery forces you to
 adapt or substitute.
 
-You may also be given the athlete's CHECK-IN for tomorrow — their own stated
-focus, active pain points, location (home/gym → pick the matching PT routine),
-time available, and a free-text note. Treat the check-in as a strong preference:
-honor it unless it conflicts with the hard rules or the pain guardrail, in which
-case follow the rules and say why in rationale_summary.
+You may also be given the athlete's LONG-TERM GOALS — the direction they're
+training toward. Weave them into the choice (progressions, deloads, milestones)
+without ever breaking the hard rules or the pain guardrail.
 
 Hard rules (never violate; the playbook directives sit below these):
 - Never program: {forbidden}.
@@ -62,7 +59,7 @@ def build_user_prompt(
     research: list[ResearchHit],
     revision_feedback: list[str] | None = None,
     playbook_text: str = "",
-    checkin: CheckIn | None = None,
+    goals_text: str = "",
 ) -> str:
     parts = [
         f"Propose the session for {for_date.isoformat()}.",
@@ -70,9 +67,8 @@ def build_user_prompt(
         f"Today (log): {notion.model_dump_json()}",
         f"History features: {features.model_dump_json()}",
     ]
-    if checkin is not None and not checkin.is_empty():
-        parts.append("# CHECK-IN (athlete's stated preference for tomorrow)\n"
-                     + checkin.model_dump_json())
+    if goals_text:
+        parts.append("# LONG-TERM GOALS\n" + goals_text)
     if playbook_text:
         parts.append("# PLAYBOOK\n" + playbook_text)
     if research:
@@ -97,7 +93,7 @@ def compose_session(
     model: str,
     revision_feedback: list[str] | None = None,
     playbook_text: str = "",
-    checkin: CheckIn | None = None,
+    goals_text: str = "",
 ) -> StructuredSession:
     from openai import OpenAI
 
@@ -118,7 +114,7 @@ def compose_session(
                 "role": "user",
                 "content": build_user_prompt(
                     for_date, garmin, notion, features, research,
-                    revision_feedback, playbook_text, checkin,
+                    revision_feedback, playbook_text, goals_text,
                 ),
             },
         ],

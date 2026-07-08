@@ -1,22 +1,25 @@
 # Jim
 
-A nightly training agent (single-user personal tool). At end of day it reviews
-what actually happened (Garmin + Notion), reasons about tomorrow within joint
-constraints, optionally researches, and proposes tomorrow's session — pushing
-structured workouts to Garmin Connect on approval.
+A personal training agent (single user). Every night it reviews what actually
+happened (Garmin + a read-only Notion habit log), reasons about tomorrow
+within joint constraints, and drops a proposal into **Jim's chat** — a
+lightweight self-hosted chat where you iterate on the plan (or the whole
+week), keep long-term goals in plain language, and push to Garmin with one
+button. Chat-approved days are scheduled on the watch; the nightly run never
+overrides them.
 
-Full design: [PLAN.md](PLAN.md). Milestone status:
+Full design: [PLAN.md](PLAN.md) (agent originally code-named Vesper).
+Milestone status:
 
-- [x] **M1** — Garmin write round-trip: verified server-side (docs/garmin_strength.md); awaiting on-watch visual confirmation
+- [x] **M1** — Garmin write round-trip: verified server-side + on-watch
+      (docs/garmin_strength.md, exercise taxonomy verified against Garmin's own)
 - [x] **M2** — State layer as tools (`jim/tools/`, fixture-tested, `scripts/backfill.py`)
-- [x] **M3** — Bounded agent loop, propose-only (`jim/agent/loop.py`) + morning reconcile
+- [x] **M3** — Bounded agent loop, propose-only (`jim/agent/loop.py`) + nightly reconcile
 - [x] **M4** — Gated research + tier escalation (`jim/tools/research.py`, `agent/heuristics.py`)
 - [ ] **M5** — Eval suite gating `AUTO_PUSH` (`evals/run_evals.py` scaffold; needs live-compose scenarios)
 
-M2–M4 are implemented and unit-tested offline; the Notion schema mapping is
-wired to the real workspace databases (see `docs/notion_schema.md`), while the
-Garmin live path (auth + strength JSON, backfill) still needs verification —
-M1 is deliberately the first thing to run.
+Interactive surface: **the chat** (docs/chat.md). Memory model incl. long-term
+goals: docs/memory.md.
 
 ## Layout
 
@@ -24,20 +27,20 @@ M1 is deliberately the first thing to run.
 src/jim/
   config.py          # PLAN §8 constants + env-backed secrets
   schemas.py         # typed tool contracts (PLAN §7)
-  db.py              # Postgres + idempotent migration runner
-  tools/             # garmin, notion, history (deterministic), research (gated), memory
+  db.py              # Postgres + idempotent migrations + kv store
+  tools/             # garmin, notion (read-only), history, research (gated), memory
   agent/
     heuristics.py    # off-heuristic (gates research) + tier escalation
     compose.py       # the one generative step: state -> StructuredSession JSON
     validate.py      # deterministic guardrail + conservative fallback
     loop.py          # run_agent: bounded, injectable toolbox
-  jobs/              # nightly run (single cron: reconcile + plan) + optional morning job
+  jobs/              # nightly run (single cron: reconcile today + plan tomorrow)
   playbook.py        # loads playbook/ (base workouts + PT + directives) into context
-  chat.py            # chat core: message -> check-in -> immediate re-plan
-  app.py             # thin FastAPI (health + manual trigger + /chat web chat)
+  coach.py           # Jim's chat: iterate on drafts, goals memory, approve -> Garmin
+  app.py             # thin FastAPI (health + manual trigger + /chat)
 playbook/            # editable memory: base_workouts.yaml, pt_routines.yaml, directives.md
-migrations/          # additive, idempotent SQL (PLAN §6)
-scripts/             # m1_roundtrip.py (live), backfill.py (live)
+migrations/          # additive, idempotent SQL (PLAN §6 + kv/chat)
+scripts/             # m1_roundtrip.py (live), backfill.py (live), seed_corpus.py
 evals/               # M5 scaffold: plan quality / tool use / cost
 tests/               # offline only — recorded fixtures, no live APIs
 ```
@@ -61,12 +64,10 @@ python evals/run_evals.py
 ## Run
 
 ```bash
-python scripts/m1_roundtrip.py        # M1: put one hardcoded workout on the watch
-python scripts/backfill.py 90        # M2: backfill Garmin history into Postgres
-python -m jim.jobs.nightly        # the nightly agent run
-python -m jim.jobs.reconcile      # the morning adherence job
-uvicorn jim.app:app --reload      # local service
+python -m jim.jobs.nightly        # the nightly run: reconcile today + plan tomorrow
+uvicorn jim.app:app --reload      # local service; chat at /chat?key=<CHAT_SECRET>
+python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
 
-Deploy: `render.yaml` (web service + two cron jobs; secrets via the
-`jim-secrets` env group). Cron schedules are in UTC — see the comment there.
+Deploy: `render.yaml` (web service + one nightly cron; secrets via the
+`jim-secrets` env group). Cron schedule is UTC — see the comment there.

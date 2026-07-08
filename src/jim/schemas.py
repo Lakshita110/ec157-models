@@ -4,7 +4,7 @@ Every tool returns one of these compact models — never raw API payloads.
 Raw payloads are persisted to the `raw JSON` columns instead so features can
 be recomputed without re-fetching."""
 
-from datetime import date, datetime
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -43,27 +43,6 @@ class NotionDay(BaseModel):
     habits: dict[str, bool] = {}
     day_score: int | None = None
     tomorrow_tasks: list[str] = []
-
-
-class CheckIn(BaseModel):
-    """The athlete's own input for a target day: what they want, how they feel,
-    where they'll be. Read from the Notion 'training check-in' DB and folded
-    into the compose context. All fields optional — a blank check-in is fine."""
-
-    for_date: date
-    note: str = ""  # free text: preferences, active pain, constraints
-    focus: str = ""  # upper / lower / full body / conditioning / pt only / rest
-    location: str = ""  # gym / home — drives the PT variant
-    minutes: int | None = None  # time available
-    energy: str = ""  # low / normal / high
-    # Notion last_edited_time — lets the morning job detect a check-in written
-    # or changed AFTER the nightly proposal, which triggers a same-day re-plan.
-    edited_ts: datetime | None = None
-
-    def is_empty(self) -> bool:
-        return not any(
-            [self.note, self.focus, self.location, self.minutes, self.energy]
-        )
 
 
 class HistoryFeatures(BaseModel):

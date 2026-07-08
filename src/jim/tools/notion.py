@@ -1,6 +1,7 @@
-"""Notion tools: read the habits/knee log and tasks, write proposals.
+"""Notion tools — READ ONLY. Notion is a data source (habits/knee log,
+tasks); all interaction happens in Jim's chat.
 
-Wired to the real workspace schemas (resolves PLAN.md §12 Q1/Q3):
+Wired to the real workspace schemas (resolves PLAN.md §12 Q1):
 
 - "habits db" (knee+habit log): title `name`, date `date`, number `pain level`,
   multi-select `knee pain` (mixes severity words none/mild/moderate/severe with
@@ -8,20 +9,17 @@ Wired to the real workspace schemas (resolves PLAN.md §12 Q1/Q3):
   `pain notes`, checkbox `physical therapy`, habit checkboxes (cardio, reading,
   strength training, vitamins, dental care), formula `day score`.
 - "tasks ": title `task`, dates `do date` / `due date`, status `status`.
-- "training proposals": title `name`, date `date`, selects `kind` + `status`,
-  checkbox `research used`. Proposals land as `status=proposed` for morning
-  review.
 
 `pain level` is often left blank; when it is, a numeric level is derived from
 the severity word in `knee pain` (none=0, mild=2, moderate=5, severe=8) so the
 off-heuristic always has a number to work with."""
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from jim.config import settings
-from jim.schemas import CheckIn, NotionDay, StructuredSession
+from jim.schemas import NotionDay
 
 log = logging.getLogger(__name__)
 
@@ -116,35 +114,6 @@ def parse_task_page(page: dict[str, Any]) -> str:
     return _text(page, PROP_TASK_TITLE)
 
 
-def parse_checkin_page(page: dict[str, Any], day: date) -> CheckIn:
-    minutes = _number(page, "minutes")
-    edited_raw = page.get("last_edited_time")
-    return CheckIn(
-        for_date=day,
-        note=_text(page, "note"),
-        focus=_text(page, "focus"),
-        location=_text(page, "location"),
-        minutes=int(minutes) if minutes is not None else None,
-        energy=_text(page, "energy"),
-        edited_ts=(
-            datetime.fromisoformat(edited_raw.replace("Z", "+00:00"))
-            if edited_raw
-            else None
-        ),
-    )
-
-
-def get_checkin(day: date) -> CheckIn:
-    """The athlete's own input for `day` (empty CheckIn if none was written)."""
-    cfg = settings()
-    rows = client().databases.query(
-        database_id=cfg.notion_checkin_db_id,
-        filter={"property": "date", "date": {"equals": day.isoformat()}},
-        page_size=1,
-    ).get("results", [])
-    return parse_checkin_page(rows[0], day) if rows else CheckIn(for_date=day)
-
-
 # --- tool contracts (PLAN.md §7) -------------------------------------------
 
 
@@ -180,43 +149,3 @@ def get_notion_logs(day: date) -> NotionDay:
     ).get("results", [])
     result.tomorrow_tasks = [t for t in (parse_task_page(p) for p in task_rows) if t]
     return result
-
-
-def write_notion(
-    for_date: date,
-    plan: StructuredSession,
-    rationale: str,
-    research_used: bool = False,
-) -> None:
-    """Write the proposal + reasoning to the training proposals DB (status=proposed)."""
-    cfg = settings()
-    steps_text = "\n".join(
-        f"- {s.exercise}: {s.sets}x{s.reps or ''}"
-        + (f" @ {s.weight_kg}kg" if s.weight_kg else "")
-        + (f" ({s.duration_sec}s)" if s.duration_sec else "")
-        for s in plan.steps
-    )
-    client().pages.create(
-        parent={"database_id": cfg.notion_proposal_db_id},
-        properties={
-            "name": {"title": [{"text": {"content": f"{for_date}: {plan.title}"}}]},
-            "date": {"date": {"start": for_date.isoformat()}},
-            "kind": {"select": {"name": plan.kind}},
-            "status": {"select": {"name": "proposed"}},
-            "research used": {"checkbox": research_used},
-        },
-        children=[
-            _paragraph(f"Est. duration: {plan.est_duration_min:.0f} min"),
-            _paragraph(steps_text or "(rest day — no steps)"),
-            _paragraph(f"Why: {rationale}"),
-        ],
-    )
-    log.info("wrote proposal for %s to Notion", for_date)
-
-
-def _paragraph(text: str) -> dict[str, Any]:
-    return {
-        "object": "block",
-        "type": "paragraph",
-        "paragraph": {"rich_text": [{"type": "text", "text": {"content": text[:2000]}}]},
-    }

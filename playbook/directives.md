@@ -1,10 +1,11 @@
-# Directives — standing instructions for the nightly agent
+# Directives — standing instructions for Jim
 
 <!--
-This file IS how you give the agent instructions. Edit it in plain English;
-it's loaded into the agent's context every night, so a change here takes
-effect on the next run. Keep it short and imperative. The agent treats these
-as rules, above its own judgement, below the hard safety guardrail in code.
+This file holds standing rules, in plain English; it's loaded into Jim's
+context on every nightly run AND every chat turn. Keep it short and
+imperative. Jim treats these as rules, above its own judgement, below the
+hard safety guardrail in code. Day-to-day input and long-term goals go
+through the chat instead (docs/chat.md).
 -->
 
 ## Weekly shape
@@ -24,23 +25,21 @@ as rules, above its own judgement, below the hard safety guardrail in code.
 
 ## PT days — home vs gym
 
-- If tomorrow's **check-in** sets a location, use it (home → `pt_home`,
-  gym → `pt_gym`). The check-in always wins.
+- If I said where I'll be (in chat), that wins (home → `pt_home`,
+  gym → `pt_gym`).
 - Otherwise default to **gym PT** on weekdays, **home PT** on weekends or when
   tomorrow's tasks/travel mean no gym.
 - If you still can't tell, pick home PT — it needs the least equipment.
 - Always keep the ★ priority exercise (ankle eversion) in; it's the driver for
   the lateral ankle pain.
 
-## The check-in (my input for tomorrow)
+## When I give day-specific input in chat
 
-- Read the `training check-in` row dated for the target day. It carries my
-  stated focus, active pain points, location, minutes available, and a
-  free-text note. Treat it as a strong preference and honor it unless it breaks
-  a hard rule or the pain guardrail — then follow the rule and tell me why.
-- If minutes are given, fit the session to that budget (trim accessory work,
-  keep the priority + iso-anchor moves).
-- No check-in = decide from recovery, pain, and the rotation as usual.
+- Treat it as a strong preference: honor it unless it breaks a hard rule or
+  the pain guardrail — then follow the rule and tell me why.
+- If I give a time budget, fit the session to it (trim accessory work, keep
+  the priority + iso-anchor moves).
+- Nothing said = decide from recovery, pain, goals, and the rotation as usual.
 
 ## Pain & flare rules (from PT — do not override)
 

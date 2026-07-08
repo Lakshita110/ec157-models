@@ -1,81 +1,63 @@
 # Memory & instructions
 
-Jim has three memory layers, separated by how often each changes and who
-edits it. This is the answer to "how do I give the agent instructions."
+Jim has four memory layers, ordered by how durable they are and who writes
+them. This is the answer to "how do I give the agent instructions."
+
+| Layer | Lives in | Written by | Horizon |
+|---|---|---|---|
+| Playbook directives | git (`playbook/directives.md`) | you, by hand | standing policy |
+| Long-term goals | Postgres kv (`goals`) | the chat ("my goal is…") | months |
+| Working draft | Postgres kv (`draft`) | chat + nightly run | this week |
+| Suggestions/outcomes | Postgres tables | the system | history |
 
 ## 1. Playbook — durable knowledge you edit (files)
 
-`playbook/` holds what the agent should know before reasoning:
+`playbook/` holds what Jim knows before reasoning:
 
 | File | What it is | Source of truth |
 |---|---|---|
 | `base_workouts.yaml` | The A/B/C strength rotation | the Garmin workouts (IDs referenced) |
-| `pt_routines.yaml` | PT for non-lifting days: `pt_home` + `pt_gym` | these files (gym reuses a Garmin workout) |
-| `directives.md` | **Standing instructions, in plain English** | you |
+| `pt_routines.yaml` | PT for non-lifting days: `pt_home` + `pt_gym` | these files (both exist on Garmin) |
+| `directives.md` | **Standing rules, in plain English** | you |
 
-The whole playbook is rendered into the agent's context every night
-(`playbook.py:load_playbook().to_prompt()`). **To instruct the agent, edit
-`directives.md`** — e.g. "no lifting until the flare settles", "prefer home PT
-this week", "add a fourth lifting day". The change takes effect on the next run;
-no code, no redeploy. Directives sit above the agent's own judgement and below
-the hard-coded safety guardrail (`agent/validate.py`), which can't be overridden
-from a file.
+The whole playbook is rendered into context on every nightly run and chat
+turn. Directives sit above the model's judgement and below the hard-coded
+safety guardrail (`agent/validate.py`), which nothing can override.
 
-Base workouts carry `garmin_workout_id`, so on a lifting day the agent selects a
-template and the loop schedules **that existing Garmin workout** (keeping your
-loaded weights). It only hand-builds a new workout when adapting for pain.
+Base workouts carry `garmin_workout_id`, so scheduling a template day pushes
+**that existing Garmin workout** (loaded weights preserved). Jim only builds a
+new workout when adapting for pain — and the verified exercise taxonomy in
+`tools/garmin.py` makes adapted steps render as real exercises on-watch.
 
-Editing rules of thumb:
-- Change reps/exercises in a base workout on Garmin *and* mirror it in the YAML
-  (Garmin is what lands on the watch; the YAML is what the agent reasons about).
-- `pt_home` has no Garmin workout yet — it's propose-only until one is created.
-- Tags the agent honors: `priority` (never drop — the ★ ankle eversion),
-  `skip_on_flare`, `iso_anchor`; `equipment` drives the home-vs-gym choice.
+## 2. Long-term goals — direction, in your own words (chat-written)
 
-## 1b. Check-in — your input for tomorrow (Notion)
+Tell Jim a goal in chat ("run a 5k by spring — knee health first") and it
+rewrites the plain-text goals block in the kv store. Nothing gets scheduled;
+the block is folded into every plan afterwards (progressions, deloads,
+milestones). Ask Jim "what are my goals?" or change them the same way.
 
-The `training check-in` Notion database is how you tell the agent what you want
-for a *specific* upcoming day (as opposed to `directives.md`, which is standing
-policy). Add a row dated for the target day with any of:
+## 3. Working draft — this week (chat + nightly)
 
-| Field | Use |
-|---|---|
-| `note` (free text) | preferences, active pain points, anything — the agent reads it verbatim |
-| `focus` | upper / lower / full body / conditioning / pt only / rest |
-| `location` | home / gym — picks the PT variant, overrides the weekday default |
-| `minutes` | time budget; the agent trims to fit |
-| `energy` | low / normal / high |
+The current plan-in-progress: written by the nightly run (its proposal) and by
+chat iteration; pushed to Garmin only on explicit approve. Days approved in
+chat are recorded `source='chat'` and the nightly run skips them.
 
-The nightly run reads the row dated *tomorrow* and folds it into the compose
-context as a strong preference (honored unless it breaks a hard rule or the pain
-guardrail). Everything's optional — a blank or missing check-in just means
-"decide for me." There's a seeded example row you can edit or delete.
+## 4. Episodic memory — what actually happened (Postgres)
 
-**The chat interface is the faster path for day-of changes** (docs/chat.md):
-message the agent any time and it re-plans immediately — no cron involved.
-Morning Notion check-ins are still supported via the *optional* morning job
-(`python -m jim.jobs.reconcile`, not scheduled by default), which re-plans
-today when the check-in's `last_edited_time` is newer than the nightly
-proposal.
+`suggestions` + `outcomes`: each proposal is recorded; the nightly job
+reconciles the day's Garmin actuals against it (adherence). This is what Jim
+*learns from* across weeks.
 
-## 2. Episodic memory — what actually happened (Postgres)
+## Notion: read source only
 
-`suggestions` + `outcomes` (PLAN.md §6). Each night's proposal is recorded; the
-morning reconcile job matches Garmin actuals and writes adherence. This is what
-the agent *learns from* across days — not something you edit by hand.
-
-## 3. Garmin — the exercise library
-
-Your structured workouts on Garmin Connect are the canonical exercise
-definitions. The playbook points at them by ID rather than duplicating the
-weight/exercise data, so "schedule Full Body B" reuses the real thing.
+Jim reads the habits/knee log (pain, PT adherence, habits) and tasks. It never
+writes to Notion.
 
 ## Quick "how do I…"
 
-- **Tell the agent a standing rule** → edit `playbook/directives.md`.
-- **Tell it about a specific day** (pain, focus, home/gym, time) → message the
-  chat (docs/chat.md) — or add a `training check-in` row in Notion dated for
-  that day.
+- **Standing rule** → edit `playbook/directives.md`.
+- **Long-term goal** → tell Jim in chat.
+- **This day/week** (pain, focus, home/gym, time) → tell Jim in chat, then
+  Push to Garmin.
 - **Change a base workout** → edit it on Garmin, mirror reps in
   `base_workouts.yaml`.
-- **Add/adjust a PT routine** → edit `pt_routines.yaml`.

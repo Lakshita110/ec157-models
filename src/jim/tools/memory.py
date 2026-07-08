@@ -15,17 +15,32 @@ def record_suggestion(
     rationale: str,
     research_used: bool,
     tier: str,
+    source: str = "nightly",
 ) -> int:
     from jim.db import connect
 
     with connect() as conn:
         row = conn.execute(
-            "INSERT INTO suggestions (for_date, plan, rationale, research_used, model_tier)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (for_date, json.dumps(plan.model_dump(mode="json")), rationale, research_used, tier),
+            "INSERT INTO suggestions (for_date, plan, rationale, research_used,"
+            " model_tier, source) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (for_date, json.dumps(plan.model_dump(mode="json")), rationale,
+             research_used, tier, source),
         ).fetchone()
         conn.commit()
     return int(row["id"])
+
+
+def chat_planned(for_date: date) -> bool:
+    """True when the athlete already iterated + approved a plan for `for_date`
+    in chat — the nightly run must not overwrite it."""
+    from jim.db import connect
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM suggestions WHERE for_date = %s AND source = 'chat' LIMIT 1",
+            (for_date,),
+        ).fetchone()
+    return row is not None
 
 
 def record_outcome(

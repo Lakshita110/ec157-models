@@ -17,7 +17,6 @@ from datetime import date
 from jim.agent.loop import RunReport, Toolbox, run_agent
 from jim.config import MAX_TOOL_CALLS
 from jim.schemas import (
-    CheckIn,
     ExerciseStep,
     GarminToday,
     HistoryFeatures,
@@ -96,12 +95,13 @@ def run_scenario(sc: Scenario) -> tuple[RunReport, list[str]]:
     tools = Toolbox(
         get_garmin_today=lambda day: sc.garmin,
         get_notion_logs=lambda day: sc.notion,
-        get_checkin=lambda day: CheckIn(for_date=day),
         query_history=lambda day: sc.features,
         research_training=fake_research,
         compose_session=lambda for_date, *a, **kw: sane_session(for_date),
-        write_notion=lambda *a, **kw: None,
+        save_draft=lambda sessions: None,
         record_suggestion=lambda *a, **kw: 1,
+        chat_planned=lambda day: False,
+        load_goals=lambda: "",
         create_garmin_workout=lambda s: None,
         schedule_workout=lambda *a, **kw: None,
     )
