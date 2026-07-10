@@ -326,7 +326,7 @@ const KIND = { strength:"STR", conditioning:"COND", mobility:"PT", rest:"REST" }
 const KIND_FULL = { strength:"Strength", conditioning:"Conditioning", mobility:"PT / mobility", rest:"Rest" };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const rowSig = new Map();
-let curReadiness = null, curPain = null;
+let curReadiness = null, curPain = null, serverToday = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function isoLocal(d) {
@@ -423,7 +423,10 @@ function stepLine(x) {
   return esc(x.exercise) + " " + dose + wt;
 }
 function buildWeek(draft) {
-  const today = new Date(), days = [];
+  // Anchor on the server's date (APP_TIMEZONE) so the week can't drift from the
+  // browser's local day and hide a session dated "today". Falls back to local.
+  const today = serverToday ? new Date(serverToday + "T00:00:00") : new Date();
+  const days = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
     const iso = isoLocal(d);
@@ -483,6 +486,7 @@ async function send(text) {
   try {
     const data = await api("/chat/message", { text });
     settle(busy, data.reply);
+    if (data.today) serverToday = data.today;
     if (data.draft !== null && data.draft !== undefined) renderPlan(data.draft);
   } catch (err) { settle(busy, err.message); }
 }
@@ -494,6 +498,7 @@ async function load() {
     if (!r.ok) { add("bot", s.detail || "error"); return; }
     curReadiness = s.readiness || null;
     curPain = s.pain || null;
+    serverToday = s.today || serverToday;
     if (!s.history.length) showHero();
     for (const m of s.history) add(m.role === "user" ? "me" : "bot", m.content);
     renderPlan(s.draft, { pulse: false });

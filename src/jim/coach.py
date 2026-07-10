@@ -401,7 +401,7 @@ def converse(text: str, deps: CoachDeps | None = None) -> dict:
 
     history.append({"role": "assistant", "content": reply})
     deps.kv_set("chat_history", history[-HISTORY_LIMIT:])
-    return {"reply": reply, "draft": deps.kv_get("draft") or []}
+    return {"reply": reply, "draft": deps.kv_get("draft") or [], "today": today.isoformat()}
 
 
 def approve(deps: CoachDeps | None = None) -> str:
@@ -468,4 +468,5 @@ def current_state(deps: CoachDeps | None = None) -> dict:
         "goals": deps.kv_get("goals") or "",
         "readiness": readiness,
         "pain": pain,
+        "today": deps.now().date().isoformat(),
     }
