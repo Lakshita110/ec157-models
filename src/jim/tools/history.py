@@ -6,7 +6,7 @@ database; `query_history` is the thin DB-backed wrapper the agent calls."""
 from datetime import date, timedelta
 from typing import Any
 
-from jim.schemas import HistoryFeatures
+from jim.schemas import HistoryFeatures, ReadinessRead
 
 # Activity/exercise name fragments -> coarse muscle group. Deliberately coarse:
 # the balance feature only needs to expose "you haven't touched X in a while".
@@ -124,6 +124,118 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
             (start, as_of),
         ).fetchall()
     return compute_features(as_of, window_days, activities, logs, daily)
+
+
+# --- load & readiness (a planning verdict, not a dashboard) -----------------
+
+# Readiness thresholds (Garmin Training Readiness / Body Battery, 0-100).
+_R_LOW = 35  # below this: recovery is poor — rest/PT
+_R_MEH = 50  # below this: don't add load
+
+# ACWR bands: <0.8 room to build, 0.8-1.3 sweet spot, >1.5 injury-risk spike.
+_ACWR_LOW = 0.8
+_ACWR_HIGH = 1.5
+
+
+def _acwr(
+    activities: list[dict[str, Any]], as_of: date, key: str
+) -> tuple[float, float, float | None]:
+    """Acute (7d sum), chronic (28d sum / 4 = avg week), and their ratio for `key`."""
+    acute_start = as_of - timedelta(days=6)
+    chronic_start = as_of - timedelta(days=27)
+    acute = sum(
+        float(a.get(key) or 0) for a in activities if acute_start <= a["day"] <= as_of
+    )
+    chronic_total = sum(
+        float(a.get(key) or 0) for a in activities if chronic_start <= a["day"] <= as_of
+    )
+    chronic = chronic_total / 4.0
+    acwr = round(acute / chronic, 2) if chronic > 0 else None
+    return acute, chronic, acwr
+
+
+def compute_readiness(
+    as_of: date,
+    activities: list[dict[str, Any]],
+    daily: list[dict[str, Any]],
+) -> ReadinessRead:
+    """Distil trailing load + today's recovery into one planning verdict. Pure.
+
+    Prefers Garmin training-load for the ACWR; falls back to training minutes
+    when load isn't populated (strength sessions often lack a load score).
+    A poor recovery read pulls the verdict down regardless of the ratio."""
+    a_load, c_load, acwr_load = _acwr(activities, as_of, "training_load")
+    if c_load > 0:
+        acute, chronic, acwr, basis = a_load, c_load, acwr_load, "load"
+    else:
+        acute, chronic, acwr = _acwr(activities, as_of, "duration_min")
+        basis = "minutes" if chronic > 0 else "none"
+
+    today = next((d for d in daily if d["day"] == as_of), None) or {}
+    readiness = today.get("readiness")
+    body_battery = today.get("body_battery")
+    recovery = readiness if readiness is not None else body_battery
+
+    status = "steady"
+    if acwr is not None:
+        if acwr > _ACWR_HIGH:
+            status = "ease"
+        elif acwr < _ACWR_LOW:
+            status = "push"
+    if recovery is not None:
+        if recovery < _R_LOW:
+            status = "rest" if status == "ease" else "ease"
+        elif recovery < _R_MEH and status == "push":
+            status = "steady"
+
+    headline = {
+        "push": "Clear to push",
+        "steady": "Steady — hold your load",
+        "ease": "Ease off today",
+        "rest": "Recovery low — rest or PT",
+    }[status]
+
+    reasons = []
+    if acwr is not None:
+        reasons.append(f"7d {basis} {acute:.0f} vs avg week {chronic:.0f} (ACWR {acwr})")
+    label = "readiness" if readiness is not None else "body battery"
+    if recovery is not None:
+        reasons.append(f"{label} {recovery}")
+    detail = "; ".join(reasons) or "not enough recent data yet"
+
+    return ReadinessRead(
+        as_of=as_of,
+        acute_load=round(acute, 1),
+        chronic_load=round(chronic, 1),
+        acwr=acwr,
+        basis=basis,
+        readiness=readiness,
+        body_battery=body_battery,
+        hrv=today.get("hrv"),
+        sleep_hours=today.get("sleep_hours"),
+        status=status,
+        headline=headline,
+        detail=detail,
+    )
+
+
+def readiness_read(as_of: date) -> ReadinessRead:
+    """DB-backed load + readiness verdict for the coach and UI badge."""
+    from jim.db import connect
+
+    start = as_of - timedelta(days=27)
+    with connect() as conn:
+        activities = conn.execute(
+            "SELECT day, duration_min, training_load FROM garmin_activities"
+            " WHERE day BETWEEN %s AND %s",
+            (start, as_of),
+        ).fetchall()
+        daily = conn.execute(
+            "SELECT day, readiness, body_battery, hrv, sleep_hours FROM garmin_daily"
+            " WHERE day BETWEEN %s AND %s",
+            (start, as_of),
+        ).fetchall()
+    return compute_readiness(as_of, activities, daily)
 
 
 # --- exercise-level performance history (progression memory) ----------------

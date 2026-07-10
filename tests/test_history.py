@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 
 from jim.tools.history import (
     classify_muscle_group,
     compute_features,
+    compute_readiness,
     days_since_legs,
     muscle_group_balance,
     pain_trend,
@@ -68,3 +69,54 @@ def test_compute_features_assembles_everything():
     assert f.weekly_volume_min == 115
     assert f.days_since_legs == 0
     assert f.avg_readiness == 50
+
+
+# --- load & readiness verdict ---------------------------------------------
+
+
+def _load_act(day: date, load: float) -> dict:
+    return {"day": day, "duration_min": 40, "training_load": load}
+
+
+def test_readiness_uses_training_load_when_present():
+    # Steady base of 100/week for 4 weeks, so chronic avg-week = 100.
+    acts = [_load_act(AS_OF - timedelta(days=d), 100 / 7) for d in range(28)]
+    r = compute_readiness(AS_OF, acts, [{"day": AS_OF, "readiness": 70}])
+    assert r.basis == "load"
+    assert r.acwr is not None and 0.9 <= r.acwr <= 1.1
+    assert r.status == "steady"
+
+
+def test_readiness_flags_load_spike_as_ease():
+    # Light chronic base, heavy last week -> ACWR well above 1.5.
+    acts = [_load_act(AS_OF - timedelta(days=d), 5) for d in range(8, 28)]
+    acts += [_load_act(AS_OF - timedelta(days=d), 60) for d in range(0, 7)]
+    r = compute_readiness(AS_OF, acts, [{"day": AS_OF, "readiness": 65}])
+    assert r.acwr > 1.5
+    assert r.status == "ease"
+
+
+def test_readiness_poor_recovery_overrides_to_rest():
+    acts = [_load_act(AS_OF - timedelta(days=d), 100 / 7) for d in range(28)]
+    r = compute_readiness(AS_OF, acts, [{"day": AS_OF, "readiness": 20}])
+    assert r.status == "ease"  # low readiness pulls steady down
+    acts_spike = [_load_act(AS_OF - timedelta(days=d), 5) for d in range(8, 28)]
+    acts_spike += [_load_act(AS_OF - timedelta(days=d), 60) for d in range(0, 7)]
+    r2 = compute_readiness(AS_OF, acts_spike, [{"day": AS_OF, "body_battery": 25}])
+    assert r2.status == "rest"  # ease + very low recovery -> rest
+
+
+def test_readiness_falls_back_to_minutes_without_load():
+    acts = [{"day": AS_OF - timedelta(days=d), "duration_min": 30, "training_load": None}
+            for d in range(28)]
+    r = compute_readiness(AS_OF, acts, [{"day": AS_OF, "readiness": 60}])
+    assert r.basis == "minutes"
+    assert r.acwr is not None
+
+
+def test_readiness_no_data_is_steady():
+    r = compute_readiness(AS_OF, [], [])
+    assert r.status == "steady"
+    assert r.acwr is None
+    assert r.basis == "none"
+    assert "not enough" in r.detail

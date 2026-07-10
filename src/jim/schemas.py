@@ -57,6 +57,27 @@ class HistoryFeatures(BaseModel):
     avg_readiness: float | None = None
 
 
+class ReadinessRead(BaseModel):
+    """Load + recovery distilled into a single planning verdict.
+
+    Garmin Connect already charts the raw numbers; this exists only to turn
+    them into a decision — how hard tomorrow should be — for the coach and a
+    one-glance UI badge. `status` drives both."""
+
+    as_of: date
+    acute_load: float = 0.0  # trailing 7-day workload (training load or minutes)
+    chronic_load: float = 0.0  # trailing 28-day workload / 4 (avg week)
+    acwr: float | None = None  # acute:chronic ratio; sweet spot ~0.8-1.3
+    basis: Literal["load", "minutes", "none"] = "none"  # what the ratio is built from
+    readiness: int | None = None  # Garmin Training Readiness (0-100)
+    body_battery: int | None = None
+    hrv: float | None = None
+    sleep_hours: float | None = None
+    status: Literal["push", "steady", "ease", "rest"] = "steady"
+    headline: str = ""  # glanceable one-liner for the UI badge
+    detail: str = ""  # short numeric reason for the coach's context
+
+
 class ExerciseStep(BaseModel):
     exercise: str
     sets: int = 1

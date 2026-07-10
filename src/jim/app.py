@@ -95,7 +95,7 @@ CHAT_PAGE = """<!doctype html><html><head>
 :root {
   --bg:#13150F; --panel:rgba(31,34,26,.72); --panel-solid:#1C1F17; --line:#2C3025;
   --ink:#ECE9E0; --muted:#98A08C; --sage:#B4CE9E; --sage-dim:#8FAE78;
-  --data:#E7B57C; --user:rgba(50,56,42,.85);
+  --data:#E7B57C; --warn:#D98C7A; --user:rgba(50,56,42,.85);
 }
 * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
 body { font-family: 'Inter', -apple-system, system-ui, sans-serif;
@@ -112,6 +112,16 @@ header { padding: 16px 22px 14px; display: flex; align-items: center; gap: 12px;
               font-size: 22px; letter-spacing: -.01em; color: var(--ink); line-height: 1.15; }
 .greet-sub { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
 .greet-sub b { color: var(--sage); font-weight: 600; }
+.ready { display: none; align-items: center; gap: 8px; padding: 7px 13px; flex-shrink: 0;
+         border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.02); }
+.ready.on { display: inline-flex; }
+.ready .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.ready.push .dot { background: var(--sage); }
+.ready.ease .dot { background: var(--data); }
+.ready.rest .dot { background: var(--warn); }
+.ready .rl { font-size: 12.5px; color: var(--ink); white-space: nowrap; }
+.ready .ra { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+             white-space: nowrap; }
 #clear { color: var(--muted); font-size: 12px; text-decoration: none; flex-shrink: 0; }
 #clear:hover { color: var(--ink); }
 
@@ -223,6 +233,7 @@ form { display: flex; gap: 10px; align-items: center;
     <div class="greet-line" id="greetLine">Hello</div>
     <div class="greet-sub" id="greetSub"><b>Jim</b> · your training coach</div>
   </div>
+  <div class="ready" id="ready" title=""><span class="dot"></span><span class="rl"></span><span class="ra"></span></div>
   <a href="#" id="clear">Clear</a>
 </header>
 <div class="main">
@@ -256,6 +267,7 @@ const planCol = document.getElementById("planCol"), peek = document.getElementBy
 const peekText = document.getElementById("peekText");
 const planRows = document.getElementById("planRows"), planStatus = document.getElementById("planStatus");
 const pushBtn = document.getElementById("push");
+const readyEl = document.getElementById("ready");
 const KIND = { strength:"STR", conditioning:"COND", mobility:"PT", rest:"REST" };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DOW_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
@@ -268,6 +280,15 @@ function setGreeting() {
   const sub = document.getElementById("greetSub");
   if (line) line.textContent = g;
   if (sub) sub.innerHTML = `<b>Jim</b> · ${DOW_FULL[now.getDay()]} ${now.getMonth()+1}/${now.getDate()}`;
+}
+
+function renderReady(r) {
+  readyEl.className = "ready";
+  if (!r || !r.headline) return;  // hidden until there's a read
+  readyEl.classList.add("on", r.status);
+  readyEl.querySelector(".rl").textContent = r.headline;
+  readyEl.querySelector(".ra").textContent = (r.acwr != null) ? `${r.acwr}×` : "";
+  readyEl.title = r.detail || "";
 }
 
 function bubble(role, node) {
@@ -384,6 +405,7 @@ async function load() {
     }
     for (const m of s.history) add(m.role === "user" ? "me" : "bot", m.content);
     renderPlan(s.draft, { pulse: false });
+    renderReady(s.readiness);
   } catch { add("bot", "network error — reload"); }
 }
 document.getElementById("f").addEventListener("submit", (e) => {

@@ -93,6 +93,12 @@ Hard rules (never violate, even if asked):
 - Leg sessions need at least {leg_gap} days since the last leg session.
 - Respect pain and low readiness: prefer PT, mobility, or easy conditioning on bad days.
 
+LOAD & READINESS: TODAY'S STATE includes a "readiness" read (acute:chronic
+workload ratio + recovery). Let its "status" steer intensity — push = room to
+build, steady = hold load, ease = keep it light, rest = PT/mobility/off. Don't
+add volume or load when the ratio is already high or recovery is poor; say one
+plain line about why when it changes the plan.
+
 The PLAYBOOK below is the athlete's base A/B/C strength rotation and PT routines.
 Prefer selecting a template unchanged: set its garmin_workout_id and template_key
 on that day and leave steps empty (the existing Garmin workout is scheduled as-is,
@@ -147,18 +153,33 @@ class CoachDeps:
         from jim.db import kv_get, kv_set
         from jim.playbook import load_playbook
         from jim.tools import garmin, memory, notion
-        from jim.tools.history import exercise_history, query_history, workout_history
+        from jim.tools.history import (
+            exercise_history,
+            query_history,
+            readiness_read,
+            workout_history,
+        )
 
         def now() -> datetime:
             return datetime.now(ZoneInfo(settings().app_timezone))
 
         def fetch_state() -> dict:
             today = now().date()
-            return {
-                "garmin": garmin.get_garmin_today(today).model_dump(mode="json"),
-                "notion": notion.get_notion_logs(today).model_dump(mode="json"),
-                "features": query_history(today).model_dump(mode="json"),
+            # Each source degrades independently — a down integration (e.g. an
+            # unshared Notion) must not blank Garmin, features, or readiness.
+            sources = {
+                "garmin": lambda: garmin.get_garmin_today(today),
+                "notion": lambda: notion.get_notion_logs(today),
+                "features": lambda: query_history(today),
+                "readiness": lambda: readiness_read(today),
             }
+            state: dict = {}
+            for name, fetch in sources.items():
+                try:
+                    state[name] = fetch().model_dump(mode="json")
+                except Exception:
+                    log.warning("state source %r unavailable this turn", name, exc_info=True)
+            return state
 
         def llm(messages: list[dict], tools: list[dict] | None = None) -> dict:
             from openai import OpenAI
@@ -419,10 +440,17 @@ def clear(deps: CoachDeps | None = None) -> None:
 
 
 def current_state(deps: CoachDeps | None = None) -> dict:
-    """What the UI shows on load: recent messages + working draft + goals."""
+    """What the UI shows on load: recent messages + working draft + goals,
+    plus the load/readiness verdict for the glanceable badge."""
     deps = deps or CoachDeps.live()
+    readiness = None
+    try:
+        readiness = _cached_state(deps).get("readiness")
+    except Exception:  # a state hiccup must never break the page load
+        log.exception("readiness read failed for current_state")
     return {
         "history": (deps.kv_get("chat_history") or [])[-HISTORY_LIMIT:],
         "draft": deps.kv_get("draft") or [],
         "goals": deps.kv_get("goals") or "",
+        "readiness": readiness,
     }
