@@ -174,6 +174,9 @@ def test_clear_resets_history_but_keeps_draft_and_goals():
     assert state["history"] == []
     assert len(state["draft"]) == 1
     assert state["goals"] == "keep me"
+    # new stat-card keys are present and null-safe when Garmin/Notion are absent
+    assert state["readiness"] is None
+    assert state["pain"] is None
 
 
 def test_lookup_tool_round_feeds_result_back():

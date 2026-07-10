@@ -441,16 +441,26 @@ def clear(deps: CoachDeps | None = None) -> None:
 
 def current_state(deps: CoachDeps | None = None) -> dict:
     """What the UI shows on load: recent messages + working draft + goals,
-    plus the load/readiness verdict for the glanceable badge."""
+    plus the readiness verdict and latest pain read for the stat cards."""
     deps = deps or CoachDeps.live()
     readiness = None
-    try:
-        readiness = _cached_state(deps).get("readiness")
-    except Exception:  # a state hiccup must never break the page load
-        log.exception("readiness read failed for current_state")
+    pain = None
+    try:  # a state hiccup must never break the page load
+        state = _cached_state(deps)
+        readiness = state.get("readiness")
+        notion = state.get("notion") or {}
+        if notion.get("pain_level") is not None or notion.get("pain_location"):
+            pain = {
+                "level": notion.get("pain_level"),
+                "location": notion.get("pain_location") or "",
+                "day": notion.get("day"),
+            }
+    except Exception:
+        log.exception("state read failed for current_state")
     return {
         "history": (deps.kv_get("chat_history") or [])[-HISTORY_LIMIT:],
         "draft": deps.kv_get("draft") or [],
         "goals": deps.kv_get("goals") or "",
         "readiness": readiness,
+        "pain": pain,
     }
