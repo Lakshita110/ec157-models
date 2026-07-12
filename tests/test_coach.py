@@ -3,7 +3,16 @@
 import json
 from datetime import date, datetime
 
-from jim.coach import CoachDeps, approve, clear, converse, current_state, format_draft
+from jim.coach import (
+    CoachDeps,
+    approve,
+    clear,
+    converse,
+    current_state,
+    format_draft,
+    format_duration,
+    push_day,
+)
 from jim.schemas import ExerciseStep, StructuredSession, WorkoutRef
 
 NOW = datetime(2026, 7, 8, 19, 0)
@@ -32,6 +41,7 @@ class Fakes:
         self.llm_outputs = llm_outputs or []
         self.llm_calls: list[list[dict]] = []
         self.scheduled: list = []
+        self.cleared: list = []
         self.created: list = []
         self.recorded: list = []
         self.lookups = lookups or {}
@@ -62,6 +72,7 @@ class Fakes:
             llm=llm,
             lookup_tools=self.lookups,
             schedule_workout=lambda wid, on: self.scheduled.append((wid, on)),
+            clear_schedule=lambda on: self.cleared.append(on),
             create_garmin_workout=create,
             record_suggestion=record,
             playbook_text=lambda: "PLAYBOOK-BLOCK",
@@ -146,8 +157,63 @@ def test_approve_schedules_by_id_and_creates_custom_days():
     assert len(f.created) == 1
     # all three recorded as chat-sourced (rest day too — it blocks the nightly run)
     assert [r[2] for r in f.recorded] == ["chat", "chat", "chat"]
-    assert f.kv["draft"] == []  # cleared after push
+    # draft is kept (now visible as on-watch), and the two real days are tracked
+    assert len(f.kv["draft"]) == 3
+    assert set(f.kv["pushed"]) == {"2026-07-09", "2026-07-10"}  # rest day not on watch
     assert "Full Body A" in summary and "rest day" in summary
+
+
+def test_partial_edit_merges_and_keeps_other_days():
+    f = Fakes([{"reply": "made Fri easier", "goals": None,
+                "draft": [day("2026-07-10", title="Easy mobility", kind="mobility",
+                              steps=[], garmin_workout_id="1625297181")]}])
+    f.kv["draft"] = [day("2026-07-09", title="Full Body A"), day("2026-07-10")]
+    out = converse("make friday easier", f.deps(), scope_date="2026-07-10")
+    # Thu untouched, Fri replaced — the week isn't wiped by a one-day edit
+    assert [d["for_date"] for d in out["draft"]] == ["2026-07-09", "2026-07-10"]
+    assert out["draft"][0]["title"] == "Full Body A"
+    assert out["draft"][1]["title"] == "Easy mobility"
+    # scope hint reached the model
+    assert "editing ONLY 2026-07-10" in f.llm_calls[0][0]["content"]
+
+
+def test_empty_draft_list_wipes_plan():
+    f = Fakes([{"reply": "cleared", "draft": [], "goals": None}])
+    f.kv["draft"] = [day("2026-07-09")]
+    out = converse("scrap the plan", f.deps())
+    assert out["draft"] == []
+
+
+def test_push_day_pushes_one_and_tracks_status():
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-09", title="Full Body A"), day("2026-07-10")]
+    res = push_day("2026-07-10", f.deps())
+    # only the one day was scheduled; the other is left alone
+    assert f.scheduled == [("9999", date(2026, 7, 10))]
+    assert res["push_status"] == {"2026-07-10": "pushed"}
+    assert "Pushed to Garmin" in res["summary"]
+    assert f.cleared == []  # first push, nothing to unschedule
+
+
+def test_push_day_update_unschedules_then_reschedules():
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-10")]
+    push_day("2026-07-10", f.deps())
+    push_day("2026-07-10", f.deps())  # push again = update
+    assert f.cleared == [date(2026, 7, 10)]  # old schedule cleared before re-push
+    assert len(f.scheduled) == 2
+
+
+def test_push_status_flags_day_edited_after_push():
+    f = Fakes()
+    f.kv["draft"] = [day("2026-07-10", title="Full Body A")]
+    push_day("2026-07-10", f.deps())
+    # edit that day after pushing
+    f.kv["draft"] = [day("2026-07-10", title="Full Body A",
+                         steps=[{"exercise": "Bench press", "sets": 3, "reps": 10,
+                                 "duration_sec": None, "weight_kg": 45, "notes": ""}])]
+    state = current_state(f.deps())
+    assert state["push_status"] == {"2026-07-10": "modified"}
 
 
 def test_approve_with_empty_draft_is_a_noop():
@@ -250,3 +316,13 @@ def test_format_draft_renders_doses_and_template_refs():
     text = format_draft(sessions)
     assert "Bench press — 3x8 @ 40.0kg" in text
     assert "[existing workout: pt_home]" in text
+
+
+def test_format_duration_prefers_minutes_over_long_second_counts():
+    assert format_duration(30) == "30s"    # a short hold stays in seconds
+    assert format_duration(45) == "45s"
+    assert format_duration(60) == "1m"
+    assert format_duration(600) == "10m"
+    assert format_duration(1800) == "30m"  # not "1800s"
+    assert format_duration(90) == "2m"     # rounded, not "1.5m"
+    assert format_duration(None) == "0s"

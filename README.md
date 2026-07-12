@@ -69,5 +69,15 @@ uvicorn jim.app:app --reload      # local service; chat at /chat?key=<CHAT_SECRE
 python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
 
-Deploy: `render.yaml` (web service + one nightly cron; secrets via the
-`jim-secrets` env group). Cron schedule is UTC — see the comment there.
+## Deploy
+
+**[DEPLOY.md](DEPLOY.md)** — Vercel serves the chat (`vercel.json` +
+`api/index.py`), Neon is the database, and Vercel Cron hits `/api/cron/nightly`.
+Then install the chat to your phone's home screen as a PWA.
+
+Three things that bite if you skip the guide. Serverless has no reliable startup
+hook, so migrations run on the request path (`db.ensure_migrated()`), not at boot.
+A function can't do a Garmin SSO login — no stdin to answer MFA — so it uses a
+`GARMIN_TOKENS` session blob (`python scripts/garmin_login.py --export`). And the
+nightly must finish inside the function's `maxDuration`; the endpoint returns
+`elapsed_sec` so you can watch for it.

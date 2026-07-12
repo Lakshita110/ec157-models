@@ -1,14 +1,20 @@
-"""Nightly entrypoint for Render Cron (~21:00 local): sync today's data into
-Postgres, then run the agent. `python -m jim.jobs.nightly`."""
+"""Nightly job (~21:00 local): sync today's data into Postgres, reconcile, then
+plan tomorrow.
+
+Two entrypoints, same work:
+- Vercel Cron -> GET /api/cron/nightly (see app.py), the deployed path.
+- `python -m jim.jobs.nightly`, for running it by hand.
+"""
 
 import json
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from jim.agent.loop import run_agent
 from jim.config import settings
-from jim.db import connect, migrate
+from jim.db import connect, ensure_migrated
 
 log = logging.getLogger(__name__)
 
@@ -65,29 +71,50 @@ def sync_today() -> None:
                 except Exception:
                     log.exception("exercise sets fetch failed for %s", act.activity_id)
         conn.execute(
-            "INSERT INTO notion_daily_log (day, pain_level, pain_location, pt_done,"
-            " habits, day_score) VALUES (%s, %s, %s, %s, %s, %s)"
+            "INSERT INTO notion_daily_log (day, pain_level, pain_location, pain_notes,"
+            " pt_done, habits, day_score) VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (day) DO UPDATE SET pain_level=EXCLUDED.pain_level,"
-            " pain_location=EXCLUDED.pain_location, pt_done=EXCLUDED.pt_done,"
-            " habits=EXCLUDED.habits, day_score=EXCLUDED.day_score",
-            (today, notion.pain_level, notion.pain_location, notion.pt_done,
-             json.dumps(notion.habits), notion.day_score),
+            " pain_location=EXCLUDED.pain_location, pain_notes=EXCLUDED.pain_notes,"
+            " pt_done=EXCLUDED.pt_done, habits=EXCLUDED.habits,"
+            " day_score=EXCLUDED.day_score",
+            (today, notion.pain_level, notion.pain_location, notion.pain_notes,
+             notion.pt_done, json.dumps(notion.habits), notion.day_score),
         )
         conn.commit()
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+def run_nightly() -> dict:
+    """Sync today's data, close today's loop, then plan tomorrow.
+
+    Returns a summary (incl. elapsed seconds) so the caller can see how close the
+    run is to a serverless timeout — this is invoked from Vercel Cron, where the
+    whole thing must finish inside the function's maxDuration.
+    """
     from jim.jobs.reconcile import reconcile_day
 
-    with connect() as conn:
-        migrate(conn)
+    started = time.monotonic()
+    ensure_migrated()
     sync_today()
     today = datetime.now(ZoneInfo(settings().app_timezone)).date()
     # Close today's loop first (session is done by 21:00), then plan tomorrow.
     reconcile_day(today)
     report = run_agent(today)
-    log.info("nightly done: %s", report)
+    elapsed = round(time.monotonic() - started, 1)
+    log.info("nightly done in %ss: %s", elapsed, report)
+    return {
+        "for_date": report.for_date.isoformat(),
+        "suggestion_id": report.suggestion_id,
+        "tier": report.tier,
+        "research_used": report.research_used,
+        "tool_calls": report.tool_calls,
+        "fell_back": report.fell_back,
+        "elapsed_sec": elapsed,
+    }
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO)
+    run_nightly()
 
 
 if __name__ == "__main__":

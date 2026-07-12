@@ -25,19 +25,44 @@ _client: Any = None
 
 
 TOKEN_STORE = "~/.garminconnect"
+# garminconnect's login() switches on length: >512 chars = token data, else a
+# filesystem path. Anything shorter than this is a mangled blob, not a session.
+MIN_TOKEN_BLOB_CHARS = 512
 
 
 def client() -> Any:
-    """Lazily authenticated Garmin client (cached tokens, re-login on expiry)."""
+    """Lazily authenticated Garmin client (cached tokens, re-login on expiry).
+
+    Two token sources, in order:
+    1. GARMIN_TOKENS — a session blob (scripts/garmin_login.py --export). This is
+       what deployed containers use: their filesystem is ephemeral and a fresh
+       SSO login would block on an MFA prompt with no stdin to answer it.
+       `login()` treats a string >512 chars as token data rather than a path.
+    2. TOKEN_STORE (~/.garminconnect) — the local dev path; a full SSO login
+       happens on first use (MFA prompt on stdin) and caches tokens there.
+    """
     global _client
     if _client is None:
         from garminconnect import Garmin
 
         cfg = settings()
         garmin = Garmin(cfg.garmin_email, cfg.garmin_password)
-        # Loads cached tokens from TOKEN_STORE when present; otherwise does a
-        # full SSO login and dumps fresh tokens there.
-        garmin.login(TOKEN_STORE)
+        tokens = (cfg.garmin_tokens or "").strip()
+        if tokens:
+            # login() only treats the string as token data above 512 chars —
+            # below that it silently falls back to reading it as a PATH, which
+            # fails in a confusing way. Catch a truncated/mangled blob here.
+            if len(tokens) <= MIN_TOKEN_BLOB_CHARS:
+                raise RuntimeError(
+                    f"GARMIN_TOKENS is only {len(tokens)} chars; a real session blob is"
+                    f" >{MIN_TOKEN_BLOB_CHARS}. It was likely truncated when pasted."
+                    " Re-run: python scripts/garmin_login.py --export"
+                )
+            log.info("garmin: authenticating from GARMIN_TOKENS blob")
+            garmin.login(tokens)
+        else:
+            log.info("garmin: authenticating from token store %s", TOKEN_STORE)
+            garmin.login(TOKEN_STORE)
         _client = garmin
     return _client
 

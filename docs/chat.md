@@ -9,7 +9,7 @@ until you hit Push to Garmin**.
 1. Set `CHAT_SECRET` in the environment (long random string; chat is disabled
    without it). `OPENROUTER_API_KEY` must also be set — the conversation runs
    on the cheap tier (`MODEL_FAST`).
-2. Open `https://<your-service>.onrender.com/chat?key=<CHAT_SECRET>`.
+2. Open `https://<your-app>.vercel.app/chat?key=<CHAT_SECRET>`.
 3. On your phone: **Add to Home Screen** — it opens full-screen like an app.
 
 ## How it behaves
@@ -39,9 +39,10 @@ until you hit Push to Garmin**.
 
 ## Notion's role
 
-Read-only. Jim reads the habits/knee log and tasks as context; it never
-writes to Notion. The earlier `training check-in` and `training proposals`
-databases are dormant — delete them in Notion whenever you like.
+Read-only, and only the habits/knee log. Jim never writes to Notion, and does
+not read Notion tasks — scheduling context comes from Garmin. The `tasks `,
+`training check-in`, and `training proposals` databases are dormant — delete
+them in Notion whenever you like.
 
 ## Cost discipline
 

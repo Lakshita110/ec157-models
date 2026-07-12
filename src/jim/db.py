@@ -4,6 +4,7 @@ functions so it can be unit-tested without a database."""
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +15,37 @@ from jim.config import settings
 
 log = logging.getLogger(__name__)
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / "migrations"
+# Inside the package, not the repo root: a serverless bundle (and any non-editable
+# install) ships package data but not loose top-level directories.
+MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
+
+_migrated = False
+_migrate_lock = threading.Lock()
 
 
 def connect() -> psycopg.Connection:
     return psycopg.connect(settings().database_url, row_factory=dict_row)
+
+
+def ensure_migrated() -> None:
+    """Apply migrations once per process.
+
+    Serverless can't rely on a startup hook — Vercel's ASGI adapter does not
+    reliably run FastAPI's lifespan, and a fresh deploy with no tables 500s on
+    every request. So the request path ensures the schema itself; after the first
+    call this is a boolean check.
+    """
+    global _migrated
+    if _migrated:
+        return
+    with _migrate_lock:
+        if _migrated:
+            return
+        with connect() as conn:
+            migrate(conn)
+            conn.commit()
+        _migrated = True
+        log.info("migrations applied")
 
 
 def kv_get(key: str) -> Any:

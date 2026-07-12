@@ -16,6 +16,7 @@ State is deliberately simple — everything lives in the kv store:
 Deps are injected (`CoachDeps`) so everything unit-tests without Postgres,
 Garmin, Notion, or an LLM."""
 
+import hashlib
 import json
 import logging
 from collections.abc import Callable
@@ -87,11 +88,25 @@ TOOL_SCHEMAS = [
 SYSTEM_PROMPT = """You are Jim, a careful strength & conditioning coach for one athlete
 with knee and ankle constraints. You chat naturally and iterate on training plans.
 
+VOICE: warm, playful, a little flirty — the hype-you-up gym partner who teases
+gently, throws the occasional wink, and genuinely celebrates wins ("look at you
+go 💪"). Charm is welcome; emojis sparingly (at most one). But never let the fun
+bury the substance — the plan, the numbers, and the safety calls stay crisp and
+come first. Read the room: if they're in pain, wiped out, or having a rough day,
+drop the banter and just be kind and solid.
+
 Hard rules (never violate, even if asked):
 - Never program: {forbidden}.
 - Keep any session under {max_min} minutes.
 - Leg sessions need at least {leg_gap} days since the last leg session.
 - Respect pain and low readiness: prefer PT, mobility, or easy conditioning on bad days.
+
+PAIN: the athlete's own log is the source of truth — "pain_level" (0-10),
+"pain_location", and "pain_notes". Read the notes, not just the number:
+"recent_pain_notes" in the features is their recent history, newest first. If
+the same complaint keeps recurring, name it and work around that joint rather
+than re-prescribing what keeps aggravating it. ("day_score" is habit tracking —
+it says nothing about pain or training; ignore it when planning.)
 
 LOAD & READINESS: TODAY'S STATE includes a "readiness" read (acute:chronic
 workload ratio + recovery). Let its "status" steer intensity — push = room to
@@ -109,8 +124,14 @@ state, change, or complete a goal, return the FULL rewritten goals block in "goa
 — that alone updates their memory; do not schedule anything for it. Weave active
 goals into your planning (progressions, deloads, milestones).
 
-DRAFT: the current working plan. Revise it when asked. A draft covers 1-{max_days}
-dated days. Nothing touches the athlete's watch until they explicitly approve.
+DRAFT: the current working plan, 1-{max_days} dated days. Revise it when asked.
+Return in "draft" ONLY the day(s) you are adding or changing — each is merged by
+for_date onto the existing plan, so days you omit are kept untouched. To plan a
+whole week, return all its days. To cancel a day, return it as kind "rest"; to
+fill a rest/empty day, just return a real session for that date (subject to the
+hard rules — a rest day is often rest for a reason, so say so if it's unwise).
+Return "draft": [] only to wipe the entire plan. Nothing touches the athlete's
+watch until they explicitly approve.
 
 TOOLS: look things up instead of guessing. Call exercise_history BEFORE setting
 any weight or rep target and progress conservatively from what was actually done
@@ -140,6 +161,7 @@ class CoachDeps:
     llm: Callable[[list[dict], list[dict] | None], dict]
     lookup_tools: dict[str, Callable[..., str]]  # name -> callable, see TOOL_SCHEMAS
     schedule_workout: Callable[..., None]
+    clear_schedule: Callable[..., None]  # unschedule planned workouts on a date
     create_garmin_workout: Callable[..., Any]
     record_suggestion: Callable[..., int]
     playbook_text: Callable[[], str]
@@ -224,6 +246,7 @@ class CoachDeps:
                 "research": research,
             },
             schedule_workout=garmin.schedule_workout,
+            clear_schedule=garmin.clear_schedule,
             create_garmin_workout=garmin.create_garmin_workout,
             record_suggestion=memory.record_suggestion,
             playbook_text=lambda: load_playbook().to_prompt(),
@@ -267,6 +290,17 @@ def _parse_draft(raw: list, today: date) -> list[StructuredSession]:
     return sessions
 
 
+def format_duration(secs: int | None) -> str:
+    """Short holds read naturally in seconds (a 30s plank); a minute or more
+    reads better in minutes (1800s -> 30m)."""
+    if not secs:
+        return "0s"
+    if secs < 60:
+        return f"{secs}s"
+    mins = secs / 60
+    return f"{mins:g}m" if mins.is_integer() else f"{round(mins)}m"
+
+
 def format_draft(sessions: list[StructuredSession]) -> str:
     """Human-readable draft summary (chat replies + approve confirmations)."""
     lines = []
@@ -276,12 +310,66 @@ def format_draft(sessions: list[StructuredSession]) -> str:
             head += f" [existing workout: {s.template_key or s.garmin_workout_id}]"
         lines.append(head)
         for step in s.steps[:10]:
-            dose = f"{step.sets}x{step.reps}" if step.reps else f"{step.sets}x{step.duration_sec}s"
+            dose = (f"{step.sets}x{step.reps}" if step.reps
+                    else f"{step.sets}x{format_duration(step.duration_sec)}")
             weight = f" @ {step.weight_kg}kg" if step.weight_kg else ""
             lines.append(f"  • {step.exercise} — {dose}{weight}")
         if len(s.steps) > 10:
             lines.append(f"  … +{len(s.steps) - 10} more")
     return "\n".join(lines)
+
+
+# --- push tracking ----------------------------------------------------------
+# 'pushed' kv: {for_date_iso: {"title", "sig", "pushed_at"}} — what is on the
+# watch. `sig` is a content hash so the UI can flag a day edited since its push.
+
+
+def _sig(session: StructuredSession) -> str:
+    raw = json.dumps(session.model_dump(mode="json"), sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode()).hexdigest()[:12]
+
+
+def _push_status(deps: CoachDeps, sessions: list[StructuredSession]) -> dict[str, str]:
+    """Per-date badge state: 'pushed' (on watch, unchanged) or 'modified'
+    (edited since its push, needs a re-push)."""
+    pushed = deps.kv_get("pushed") or {}
+    status: dict[str, str] = {}
+    for s in sessions:
+        fd = s.for_date.isoformat()
+        if fd in pushed:
+            status[fd] = "pushed" if pushed[fd].get("sig") == _sig(s) else "modified"
+    return status
+
+
+def _push_one(deps: CoachDeps, session: StructuredSession) -> str:
+    """Schedule a single session on the watch (creating the workout first when
+    it isn't an existing template) and record it. Returns a summary line."""
+    fd = session.for_date
+    if session.kind == "rest":
+        pass  # rest schedules nothing on the watch
+    elif session.garmin_workout_id:
+        deps.schedule_workout(session.garmin_workout_id, fd)
+    else:
+        ref = deps.create_garmin_workout(session)
+        deps.schedule_workout(ref.workout_id, fd)
+    deps.record_suggestion(
+        fd, session, session.rationale_summary, False, "fast", source="chat",
+    )
+    if session.kind == "rest":
+        return f"{fd}: rest day (nothing scheduled)"
+    verb = "scheduled" if session.garmin_workout_id else "created + scheduled"
+    return f"{fd}: {verb} {session.title}"
+
+
+def _mark_pushed(deps: CoachDeps, session: StructuredSession) -> None:
+    pushed = deps.kv_get("pushed") or {}
+    fd = session.for_date.isoformat()
+    if session.kind == "rest":
+        pushed.pop(fd, None)  # a rest day leaves nothing on the watch
+    else:
+        pushed[fd] = {"title": session.title, "sig": _sig(session),
+                      "pushed_at": deps.now().isoformat()}
+    deps.kv_set("pushed", pushed)
 
 
 # --- the conversation -------------------------------------------------------
@@ -349,8 +437,11 @@ def _run_model(deps: CoachDeps, system: str, history: list[dict]) -> dict:
     return _loads_json(resp.get("content") or "")
 
 
-def converse(text: str, deps: CoachDeps | None = None) -> dict:
-    """One chat turn. Returns {reply, draft} and persists history/draft/goals."""
+def converse(text: str, deps: CoachDeps | None = None,
+             scope_date: str | None = None) -> dict:
+    """One chat turn. Returns {reply, draft, push_status} and persists
+    history/draft/goals. `scope_date` (an ISO date) narrows the edit to a single
+    day — the model is told to return only that day, merged onto the plan."""
     deps = deps or CoachDeps.live()
     today = deps.now().date()
     state = _cached_state(deps)
@@ -358,6 +449,12 @@ def converse(text: str, deps: CoachDeps | None = None) -> dict:
     history = history[-HISTORY_LIMIT:] + [{"role": "user", "content": text}]
 
     system = _system_prompt(deps, state)
+    if scope_date:
+        system += (
+            f"\n\n# EDIT SCOPE\nThe athlete is editing ONLY {scope_date}. Return"
+            f' just that one day in "draft" (for_date {scope_date}); do not include'
+            " or change any other day."
+        )
     try:
         out = _run_model(deps, system, history)
     except Exception:
@@ -371,66 +468,109 @@ def converse(text: str, deps: CoachDeps | None = None) -> dict:
     if isinstance(out.get("goals"), str):
         deps.kv_set("goals", out["goals"])
 
-    # Draft: null keeps the current one; a list replaces it (after guardrail).
+    # Draft: null keeps the current one; [] wipes it; a non-empty list is merged
+    # by for_date onto the current plan (so single-day edits can't drop others).
     if isinstance(out.get("draft"), list):
-        sessions = _parse_draft(out["draft"], today)
-        features = _features(state, today)
-        violations = {
-            s.for_date.isoformat(): result.violations
-            for s in sessions
-            if not (result := validate(s, features)).ok
-        }
-        if violations:
-            history.append({"role": "assistant", "content": json.dumps(out)})
-            history.append({
-                "role": "user",
-                "content": "SYSTEM: the validator rejected these days — fix and resend"
-                " the full JSON: " + json.dumps(violations),
-            })
-            try:
-                out = _run_model(deps, system, history)
-                reply = str(out.get("reply") or reply)[:MAX_REPLY_CHARS]
-                sessions = _parse_draft(out.get("draft") or [], today)
-            except Exception:
-                log.exception("revision turn failed")
-            kept = [s for s in sessions if validate(s, _features(state, today)).ok]
-            if len(kept) < len(sessions):
-                reply += "\n(I dropped day(s) that still broke the safety rules.)"
-            sessions = kept
-        deps.kv_set("draft", [s.model_dump(mode="json") for s in sessions])
+        if not out["draft"]:
+            deps.kv_set("draft", [])
+        else:
+            sessions = _parse_draft(out["draft"], today)
+            features = _features(state, today)
+            violations = {
+                s.for_date.isoformat(): result.violations
+                for s in sessions
+                if not (result := validate(s, features)).ok
+            }
+            if violations:
+                history.append({"role": "assistant", "content": json.dumps(out)})
+                history.append({
+                    "role": "user",
+                    "content": "SYSTEM: the validator rejected these days — fix and resend"
+                    " the full JSON: " + json.dumps(violations),
+                })
+                try:
+                    out = _run_model(deps, system, history)
+                    reply = str(out.get("reply") or reply)[:MAX_REPLY_CHARS]
+                    sessions = _parse_draft(out.get("draft") or [], today)
+                except Exception:
+                    log.exception("revision turn failed")
+                kept = [s for s in sessions if validate(s, _features(state, today)).ok]
+                if len(kept) < len(sessions):
+                    reply += "\n(I dropped day(s) that still broke the safety rules.)"
+                sessions = kept
+            merged = {s.for_date.isoformat(): s
+                      for s in _parse_draft(deps.kv_get("draft") or [], today)}
+            for s in sessions:
+                merged[s.for_date.isoformat()] = s
+            ordered = [merged[k] for k in sorted(merged)][:DRAFT_MAX_DAYS]
+            deps.kv_set("draft", [s.model_dump(mode="json") for s in ordered])
 
     history.append({"role": "assistant", "content": reply})
     deps.kv_set("chat_history", history[-HISTORY_LIMIT:])
-    return {"reply": reply, "draft": deps.kv_get("draft") or [], "today": today.isoformat()}
+    saved = _parse_draft(deps.kv_get("draft") or [], today)
+    return {"reply": reply, "draft": deps.kv_get("draft") or [],
+            "push_status": _push_status(deps, saved), "today": today.isoformat()}
 
 
 def approve(deps: CoachDeps | None = None) -> str:
-    """Push every day in the draft to Garmin; record suggestions; clear draft."""
+    """Push every day in the draft to Garmin and record suggestions. The draft
+    is kept (each day now shows as on-watch) so it stays visible and editable;
+    already-pushed days are re-scheduled cleanly (unschedule first)."""
     deps = deps or CoachDeps.live()
     draft = _parse_draft(deps.kv_get("draft") or [], deps.now().date())
     if not draft:
         return "Nothing to push — the draft is empty."
-    pushed = []
+    pushed_before = deps.kv_get("pushed") or {}
+    lines = []
     for session in draft:
-        if session.kind == "rest":
-            pushed.append(f"{session.for_date}: rest day (nothing scheduled)")
-        elif session.garmin_workout_id:
-            deps.schedule_workout(session.garmin_workout_id, session.for_date)
-            pushed.append(f"{session.for_date}: scheduled {session.title}")
-        else:
-            ref = deps.create_garmin_workout(session)
-            deps.schedule_workout(ref.workout_id, session.for_date)
-            pushed.append(f"{session.for_date}: created + scheduled {session.title}")
-        deps.record_suggestion(
-            session.for_date, session, session.rationale_summary,
-            False, "fast", source="chat",
-        )
-    deps.kv_set("draft", [])
-    summary = "Pushed to Garmin:\n" + "\n".join(pushed)
+        fd = session.for_date.isoformat()
+        if fd in pushed_before and session.kind != "rest":
+            deps.clear_schedule(session.for_date)  # replace, don't duplicate
+        lines.append(_push_one(deps, session))
+        _mark_pushed(deps, session)
+    summary = "Pushed to Garmin:\n" + "\n".join(lines)
     history = (deps.kv_get("chat_history") or [])[-HISTORY_LIMIT:]
     history.append({"role": "assistant", "content": summary})
     deps.kv_set("chat_history", history)
     return summary
+
+
+def push_day(for_date: str, deps: CoachDeps | None = None) -> dict:
+    """Push (or update) a single draft day to Garmin. Returns
+    {summary, draft, push_status}. Re-pushing an already-pushed day unschedules
+    the prior one first so the watch never ends up with a duplicate."""
+    deps = deps or CoachDeps.live()
+    today = deps.now().date()
+    draft = _parse_draft(deps.kv_get("draft") or [], today)
+    draft_json = [s.model_dump(mode="json") for s in draft]
+    try:
+        target = date.fromisoformat(for_date)
+    except ValueError:
+        return {"summary": "That date didn't look right.", "draft": draft_json,
+                "push_status": _push_status(deps, draft)}
+    session = next((s for s in draft if s.for_date == target), None)
+    if session is None:
+        return {"summary": f"{for_date} isn't in the current plan.",
+                "draft": draft_json, "push_status": _push_status(deps, draft)}
+
+    updating = for_date in (deps.kv_get("pushed") or {})
+    if updating and session.kind != "rest":
+        deps.clear_schedule(target)  # replace, don't duplicate
+    if session.kind == "rest":
+        if updating:
+            deps.clear_schedule(target)
+        deps.record_suggestion(
+            target, session, session.rationale_summary, False, "fast", source="chat",
+        )
+        _mark_pushed(deps, session)  # drops it from the pushed map
+        summary = f"Cleared {for_date} — rest day, nothing left on the watch."
+    else:
+        line = _push_one(deps, session)
+        _mark_pushed(deps, session)
+        verb = "Updated on Garmin" if updating else "Pushed to Garmin"
+        summary = f"{verb} — {line.split(': ', 1)[-1]}"
+    return {"summary": summary, "draft": draft_json,
+            "push_status": _push_status(deps, draft)}
 
 
 def clear(deps: CoachDeps | None = None) -> None:
@@ -462,9 +602,11 @@ def current_state(deps: CoachDeps | None = None) -> dict:
             }
     except Exception:
         log.exception("state read failed for current_state")
+    draft = deps.kv_get("draft") or []
     return {
         "history": (deps.kv_get("chat_history") or [])[-HISTORY_LIMIT:],
-        "draft": deps.kv_get("draft") or [],
+        "draft": draft,
+        "push_status": _push_status(deps, _parse_draft(draft, deps.now().date())),
         "goals": deps.kv_get("goals") or "",
         "readiness": readiness,
         "pain": pain,

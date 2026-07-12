@@ -1,21 +1,21 @@
 # Notion schema mapping (PLAN.md §12 Q1 — resolved)
 
-Notion is a **READ-ONLY source** for Jim: the habits/knee log and tasks.
-Discovered from the live workspace on 2026-07-07. IDs are defaulted in
-`config.py:Settings` and overridable via env.
+Notion is a **READ-ONLY source** for Jim, and supplies exactly one thing: the
+habits/knee log. Discovered from the live workspace on 2026-07-07. The ID is
+defaulted in `config.py:Settings` and overridable via env.
 
 ## Databases
 
 | Purpose | Database | ID |
 |---|---|---|
 | Knee+Habit log | `habits db` (under the `habits` page) | `b872f62a28604573980e983be6fd3143` |
-| Tasks | `tasks ` (note trailing space in title) | `6843311f33194f40b65ea7e7c0f47436` |
 
-`My Tasks` also exists in the workspace but is an empty shell (no data source)
-— ignore it. Two databases from earlier iterations are **dormant** — Jim no
-longer touches them and they're safe to delete in Notion: `training proposals`
+**No tasks DB.** Scheduling context comes from Garmin, so Jim deliberately does
+not read Notion tasks (decided 2026-07-12). `tasks `, `My Tasks`, and two
+databases from earlier iterations — `training proposals`
 (`67d2cfc3c75442c4b373736ad38b1cda`) and `training check-in`
-(`b789621918c74bd58568eec9218aeb4c`).
+(`b789621918c74bd58568eec9218aeb4c`) — are all **dormant**: Jim never touches
+them and they're safe to delete in Notion.
 
 ## habits db properties
 
@@ -29,16 +29,10 @@ longer touches them and they're safe to delete in Notion: `training proposals`
 | `pain notes` | rich text | `pain_notes` |
 | `physical therapy` | checkbox | `pt_done` (excluded from `habits`) |
 | `cardio`, `reading`, `strength training`, `vitamins`, `dental care` | checkbox | `habits` dict (any new checkbox is picked up automatically) |
-| `day score` | formula (number) | `day_score` |
-
-## tasks properties
-
-Title is `task`; dates are `do date` and `due date`; `status` is a status
-property (`Not started` / `In progress` / `Done`). "Tomorrow's tasks" =
-(do date = tomorrow OR due date = tomorrow) AND status ≠ Done.
+| `day score` | formula (number) | `day_score` — a **fraction** (e.g. `0.5`), so it is a float end-to-end; coercing to int silently truncated every partial day to 0 (fixed 2026-07-12, migration `005`) |
 
 ## Remaining runtime setup
 
 The agent hits the official Notion API with `NOTION_TOKEN`. Create an internal
-integration at notion.so/my-integrations, then share **both databases** (knee
-log, tasks) with it (⋯ menu → Connections). Without the share, queries 404.
+integration at notion.so/my-integrations, then share the **habits db** with it
+(⋯ menu → Connections). Without the share, queries 404.

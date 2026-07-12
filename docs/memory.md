@@ -53,8 +53,9 @@ weight and progresses from what you actually lifted.
 
 ## Notion: read source only
 
-Jim reads the habits/knee log (pain, PT adherence, habits) and tasks. It never
-writes to Notion.
+Jim reads the habits/knee log (pain, PT adherence, habits) — nothing else. It
+never writes to Notion, and does not read Notion tasks (Garmin covers
+scheduling).
 
 ## Quick "how do I…"
 
