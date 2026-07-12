@@ -83,6 +83,27 @@ def pain_trend(logs: list[dict[str, Any]]) -> float:
     return sum((x - mean_x) * (y - mean_y) for x, y in points) / denom
 
 
+MAX_PAIN_NOTES = 6
+
+
+def recent_pain_notes(logs: list[dict[str, Any]], limit: int = MAX_PAIN_NOTES) -> list[str]:
+    """The words behind the pain trend: newest-first dated notes, e.g.
+    "2026-07-11 (right, 3/10): might've been triggered by driving".
+
+    A slope can't tell you the same complaint recurred three days running; the
+    notes can. Days with no note are skipped."""
+    noted = [log for log in logs if (log.get("pain_notes") or "").strip()]
+    noted.sort(key=lambda log: log["day"], reverse=True)
+    lines = []
+    for log in noted[:limit]:
+        bits = [b for b in (log.get("pain_location") or "",
+                            f"{log['pain_level']}/10" if log.get("pain_level") is not None else "")
+                if b]
+        where = f" ({', '.join(bits)})" if bits else ""
+        lines.append(f"{log['day']}{where}: {log['pain_notes'].strip()}")
+    return lines
+
+
 def compute_features(
     as_of: date,
     window_days: int,
@@ -99,6 +120,7 @@ def compute_features(
         muscle_group_balance=muscle_group_balance(activities, as_of),
         days_since_legs=days_since_legs(activities, as_of),
         pain_trend=pain_trend(logs),
+        recent_pain_notes=recent_pain_notes(logs),
         avg_readiness=(sum(readiness) / len(readiness)) if readiness else None,
     )
 
@@ -116,7 +138,8 @@ def query_history(as_of: date, window_days: int = 28) -> HistoryFeatures:
             (start, as_of),
         ).fetchall()
         logs = conn.execute(
-            "SELECT day, pain_level FROM notion_daily_log WHERE day BETWEEN %s AND %s",
+            "SELECT day, pain_level, pain_location, pain_notes FROM notion_daily_log"
+            " WHERE day BETWEEN %s AND %s",
             (start, as_of),
         ).fetchall()
         daily = conn.execute(

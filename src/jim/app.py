@@ -4,18 +4,50 @@ athlete iterates on plans and pushes them to Garmin on approve. The agent is a
 callable, not tied to HTTP — Render Cron invokes the nightly job directly."""
 
 import hmac
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from jim import coach
 from jim.agent.loop import run_agent
 from jim.config import settings
 
-app = FastAPI(title="jim")
+log = logging.getLogger(__name__)
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+ICON_SIZES = (180, 192, 512)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Apply migrations on boot. Without this a fresh deploy has no tables and
+    every chat request 500s until the first nightly cron happens to run. The
+    migrations are additive + idempotent, so running them each boot is safe.
+
+    A failure is logged, not fatal: /health must still answer so the platform
+    doesn't crash-loop the service while the DB is only briefly unreachable.
+    """
+    try:
+        from jim.db import connect, migrate
+
+        with connect() as conn:
+            migrate(conn)
+            conn.commit()
+        log.info("migrations applied")
+    except Exception:
+        log.exception("migrations failed on startup — chat will error until the DB is reachable")
+    yield
+
+
+app = FastAPI(title="jim", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -54,6 +86,12 @@ class KeyOnly(BaseModel):
 class ChatMessage(BaseModel):
     key: str
     text: str
+    scope_date: str | None = None  # ISO date: edit only this day
+
+
+class PushDay(BaseModel):
+    key: str
+    date: str  # ISO date of the draft day to push/update
 
 
 @app.post("/chat/message")
@@ -61,13 +99,22 @@ def chat_message(msg: ChatMessage) -> dict:
     _check_key(msg.key)
     if not msg.text.strip():
         raise HTTPException(status_code=400, detail="empty message")
-    return coach.converse(msg.text.strip())
+    return coach.converse(msg.text.strip(), scope_date=msg.scope_date)
 
 
 @app.post("/chat/approve")
 def chat_approve(body: KeyOnly) -> dict:
     _check_key(body.key)
-    return {"summary": coach.approve()}
+    summary = coach.approve()
+    state = coach.current_state()
+    return {"summary": summary, "draft": state["draft"],
+            "push_status": state["push_status"]}
+
+
+@app.post("/chat/push-day")
+def chat_push_day(body: PushDay) -> dict:
+    _check_key(body.key)
+    return coach.push_day(body.date)
 
 
 @app.post("/chat/clear")
@@ -83,11 +130,60 @@ def chat_state(key: str = "") -> dict:
     return coach.current_state()
 
 
+# --- home-screen install (DEPLOY.md) -----------------------------------------
+# Icons carry no secret, so they are public — the manifest fetches them without
+# a key. The manifest itself embeds the chat key in start_url, so it is gated.
+
+
+@app.get("/icon-{size}.png")
+def icon(size: int) -> Response:
+    if size not in ICON_SIZES:
+        raise HTTPException(status_code=404, detail="no icon at that size")
+    return Response(
+        (STATIC_DIR / f"icon-{size}.png").read_bytes(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
+@app.get("/manifest.webmanifest")
+def manifest(key: str = "") -> JSONResponse:
+    _check_key(key)
+    # start_url carries the key so the installed app opens straight into the
+    # chat — tapping the home-screen icon should never land on a 403.
+    return JSONResponse(
+        {
+            "name": "Jim — training coach",
+            "short_name": "Jim",
+            "description": "Your training partner in crime.",
+            "start_url": f"/chat?key={quote(key)}",
+            "scope": "/",
+            "display": "standalone",
+            "orientation": "portrait",
+            "background_color": "#0F100D",
+            "theme_color": "#0F100D",
+            "icons": [
+                {"src": f"/icon-{s}.png", "sizes": f"{s}x{s}", "type": "image/png",
+                 "purpose": "any maskable"}
+                for s in ICON_SIZES
+            ],
+        },
+        media_type="application/manifest+json",
+    )
+
+
 CHAT_PAGE = """<!doctype html><html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0F100D">
 <title>Jim</title>
+<link rel="manifest" href="__MANIFEST_HREF__">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jim">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500;1,9..144,600&family=Inter:wght@400;450;500;600&display=swap" rel="stylesheet">
@@ -218,7 +314,7 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 .row-day.today { background: linear-gradient(100deg, rgba(180,206,158,.12), rgba(180,206,158,.03) 72%); }
 .row-day.today::before { content:""; position: absolute; left: 0; top: 13px; bottom: 13px;
                           width: 3px; border-radius: 3px; background: var(--sage); }
-.row-day.rest { opacity: .45; }
+.row-day.rest { opacity: .62; }  /* dimmed, but still readable + editable */
 .row-day.pulse { animation: rowPulse 1100ms ease-out; }
 @keyframes rowPulse { 0% { background: rgba(180,206,158,.22); } 100% { background: transparent; } }
 .row-top { display: flex; align-items: baseline; gap: 11px; }
@@ -252,6 +348,29 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 .d-step .d-note { color: var(--muted); font-size: 11.5px; }
 .d-why { font-size: 12px; color: var(--muted); font-style: italic; margin-top: 8px;
          padding-top: 8px; border-top: 1px solid var(--line); }
+/* per-day status badge (in the row sub-line) */
+.r-badge { flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: .04em;
+           text-transform: uppercase; padding: 1px 7px; border-radius: 999px; }
+.r-badge.on  { color: var(--sage); background: rgba(180,206,158,.12); border: 1px solid rgba(180,206,158,.3); }
+.r-badge.mod { color: var(--data); background: rgba(231,181,124,.12); border: 1px solid rgba(231,181,124,.3); }
+/* inline edit affordance on a day row */
+.r-edit { flex-shrink: 0; border: none; background: transparent; color: var(--muted);
+          font-size: 13px; cursor: pointer; padding: 2px 4px; line-height: 1; }
+.r-edit:hover { color: var(--sage); }
+/* action bar inside an expanded day */
+.d-actions { display: flex; gap: 8px; margin-top: 10px; }
+.d-btn { flex: 1; padding: 8px; border-radius: 10px; font-family: inherit; font-size: 12px;
+         font-weight: 600; cursor: pointer; border: 1px solid var(--glass-line); background: var(--glass); color: var(--ink); }
+.d-btn.push { border-color: var(--sage); color: var(--sage); }
+.d-btn.push:hover { background: rgba(180,206,158,.08); }
+.d-btn:active { transform: scale(.98); }
+/* scope pill above the composer */
+.scope-bar { display: flex; padding: 0 2px 8px; }
+.scope-pill { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 500;
+              color: var(--sage); background: rgba(180,206,158,.10); border: 1px solid rgba(180,206,158,.32);
+              border-radius: 999px; padding: 6px 8px 6px 13px; }
+.scope-pill button { border: none; background: transparent; color: var(--sage); font-size: 15px;
+                     line-height: 1; cursor: pointer; padding: 0 2px; }
 .plan-foot { padding: 14px 18px calc(16px + env(safe-area-inset-bottom));
              flex-shrink: 0; position: relative; z-index: 1; }
 #push { width: 100%; padding: 14px; background: transparent; border: 1.5px solid var(--sage);
@@ -285,7 +404,7 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
 <header>
   <div class="brand">
     <div class="brand-name">Jim</div>
-    <div class="brand-sub">Data-driven training for you</div>
+    <div class="brand-sub">Your training partner in crime</div>
   </div>
   <a href="#" id="clear">Clear</a>
 </header>
@@ -310,6 +429,7 @@ form { padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); flex-shrink:
     </div>
     <div id="log"></div>
     <form id="f">
+      <div class="scope-bar" id="scopeBar" hidden></div>
       <div class="composer">
         <button type="button" id="plus" aria-label="Compose">+</button>
         <input id="t" placeholder="Ask me anything…" autocomplete="off">
@@ -340,12 +460,15 @@ const planCol = document.getElementById("planCol"), peek = document.getElementBy
 const peekText = document.getElementById("peekText");
 const planRows = document.getElementById("planRows"), planStatus = document.getElementById("planStatus");
 const pushBtn = document.getElementById("push");
+const scopeBar = document.getElementById("scopeBar");
 const KIND = { strength:"STR", conditioning:"COND", mobility:"PT", rest:"REST" };
 const KIND_FULL = { strength:"Strength", conditioning:"Conditioning", mobility:"PT / mobility", rest:"Rest" };
 const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const BADGE = { pushed: ["on", "on watch"], modified: ["mod", "re-push"] };
 const rowSig = new Map();
 const openDays = new Set();
 let curReadiness = null, curPain = null, serverToday = null;
+let curPushStatus = {}, curDraft = [], scopeDate = null;
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 // Base-workout names carry an em-dash that the model sometimes corrupts to a
@@ -404,8 +527,8 @@ function showHero() {
   hero.className = "hero"; hero.id = "hero";
   hero.innerHTML =
     `<div class="hero-hi">${greeting()} 👋</div>` +
-    `<div class="hero-line">I'm Jim — your training coach.</div>` +
-    `<div class="hero-sub">I read your Garmin data and plan around your joints. Nothing hits your watch until you push it.</div>` +
+    `<div class="hero-line">Hey you — I'm Jim. Let's get to work. 💪</div>` +
+    `<div class="hero-sub">I read your Garmin data and plan around your joints, no ego lifting on my watch. Nothing hits your watch until you push it.</div>` +
     `<div class="hero-ask">Try asking</div>`;
   const chips = document.createElement("div"); chips.className = "chips";
   [["#B4CE9E","Plan my week","plan my week"],
@@ -439,8 +562,17 @@ function typing() {
 }
 function settle(m, text) { m.classList.remove("busy"); m.textContent = text; }
 
+// Short holds read naturally in seconds (a 30s plank); anything a minute or
+// longer reads better in minutes (1800s -> 30m).
+function fmtDur(secs) {
+  if (!secs) return "0s";
+  if (secs < 60) return `${secs}s`;
+  const mins = secs / 60;
+  return `${Number.isInteger(mins) ? mins : Math.round(mins)}m`;
+}
 function stepLine(x) {
-  const dose = x.reps ? `<span class="num">${x.sets}×${x.reps}</span>` : `<span class="num">${x.sets}×${x.duration_sec}s</span>`;
+  const dose = x.reps ? `<span class="num">${x.sets}×${x.reps}</span>`
+                      : `<span class="num">${x.sets}×${fmtDur(x.duration_sec)}</span>`;
   const wt = x.weight_kg ? ` @ <span class="num">${x.weight_kg}kg</span>` : "";
   return esc(x.exercise) + " " + dose + wt;
 }
@@ -458,20 +590,33 @@ function buildWeek(draft) {
 }
 function nowHM() { return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false }); }
 
-function detailHtml(entry) {
+// A rest day (or an empty one) is still editable — you can turn it into a
+// workout; it just gets an "Add a workout" action instead of a push.
+function detailHtml(entry, iso, status) {
   let html = "";
-  if (entry.steps && entry.steps.length) {
+  const isRest = !entry || entry.kind === "rest";
+  if (entry && entry.steps && entry.steps.length) {
     html += entry.steps.map(x => {
       const note = x.notes ? `<div class="d-note">${esc(x.notes)}</div>` : "";
       return `<div class="d-step">${stepLine(x)}${note}</div>`;
     }).join("");
   }
-  if (entry.rationale_summary) html += `<div class="d-why">${esc(entry.rationale_summary)}</div>`;
+  if (entry && entry.rationale_summary) html += `<div class="d-why">${esc(entry.rationale_summary)}</div>`;
+  const acts = [`<button type="button" class="d-btn edit" data-iso="${iso}">` +
+                `${isRest ? "Add a workout" : "Edit this day"}</button>`];
+  if (!isRest) {
+    const pushLabel = status === "pushed" ? "On watch ✓"
+                    : status === "modified" ? "Update on watch" : "Push to Garmin";
+    acts.push(`<button type="button" class="d-btn push" data-iso="${iso}"` +
+              `${status === "pushed" ? " disabled" : ""}>${pushLabel}</button>`);
+  }
+  html += `<div class="d-actions">${acts.join("")}</div>`;
   return html;
 }
 
 function renderPlan(draft, opts) {
   opts = opts || {};
+  curDraft = draft || [];
   const pulseOn = opts.pulse !== false;
   const days = buildWeek(draft);
   planRows.innerHTML = "";
@@ -483,12 +628,15 @@ function renderPlan(draft, opts) {
     const changed = pulseOn && prevSig !== undefined && prevSig !== sig;
     rowSig.set(day.iso, sig);
 
+    const status = curPushStatus[day.iso] || null;   // "pushed" | "modified" | null
+    const badge = BADGE[status]
+      ? `<span class="r-badge ${BADGE[status][0]}">${BADGE[status][1]}</span>` : "";
     const typeLabel = isRest ? "—" : (KIND[entry.kind] || "—");
     const title = isRest ? "Rest" : cleanTitle(entry.title);
     const dur = (!isRest && entry.est_duration_min) ? `${Math.round(entry.est_duration_min)}m` : "";
     const steps = (!isRest && entry.steps && entry.steps.length) ? entry.steps.map(stepLine).join(" &middot; ") : "";
-    const detail = isRest ? "" : detailHtml(entry);
-    const clickable = !!detail;
+    const detail = detailHtml(entry, day.iso, status);  // rest/empty days stay editable
+    const clickable = true;
     if (changed && clickable) openDays.add(day.iso);  // auto-open a day that just changed
 
     const row = document.createElement("div");
@@ -497,13 +645,23 @@ function renderPlan(draft, opts) {
     row.innerHTML =
       `<div class="row-top"><span class="r-type">${typeLabel}</span>` +
       `<span class="r-title">${esc(title)}</span><span class="r-dur">${dur}</span>` +
+      `<button type="button" class="r-edit" data-iso="${day.iso}" title="${isRest ? "Add a workout" : "Edit this day"}">✎</button>` +
       (clickable ? `<span class="r-chev">&rsaquo;</span>` : "") + `</div>` +
-      `<div class="row-sub"><span class="r-date">${day.label}</span>` +
+      `<div class="row-sub"><span class="r-date">${day.label}</span>` + badge +
       (steps ? `<span class="r-steps">${steps}</span>` : "") + `</div>` +
       (detail ? `<div class="row-detail">${detail}</div>` : "");
     if (clickable) row.addEventListener("click", () => {
       const nowOpen = row.classList.toggle("open");
       if (nowOpen) openDays.add(day.iso); else openDays.delete(day.iso);
+    });
+    row.querySelector(".r-edit")?.addEventListener("click", (e) => {
+      e.stopPropagation(); setScope(day.iso, day.label);
+    });
+    row.querySelector(".d-btn.edit")?.addEventListener("click", (e) => {
+      e.stopPropagation(); setScope(day.iso, day.label);
+    });
+    row.querySelector(".d-btn.push")?.addEventListener("click", (e) => {
+      e.stopPropagation(); pushDay(day.iso, e.currentTarget);
     });
     if (changed) row.addEventListener("animationend", () => row.classList.remove("pulse"), { once: true });
     planRows.appendChild(row);
@@ -534,14 +692,38 @@ async function api(path, body) {
   if (!r.ok) throw new Error(data.detail || "error");
   return data;
 }
+/* --- edit scope (day vs. week) --- */
+function renderScopeBar() {
+  if (!scopeDate) { scopeBar.hidden = true; scopeBar.innerHTML = ""; t.placeholder = "Ask me anything…"; return; }
+  scopeBar.hidden = false;
+  scopeBar.innerHTML = `<span class="scope-pill">Editing ${esc(fmtWhen(scopeDate))}` +
+    `<button type="button" id="scopeX" aria-label="Clear">✕</button></span>`;
+  document.getElementById("scopeX").onclick = clearScope;
+  t.placeholder = "What should change on this day?";
+}
+function setScope(iso) { scopeDate = iso; renderScopeBar(); t.focus(); }
+function clearScope() { scopeDate = null; renderScopeBar(); }
+
+async function pushDay(iso, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
+  try {
+    const data = await api("/chat/push-day", { date: iso });
+    add("bot", data.summary);
+    if (data.push_status) curPushStatus = data.push_status;
+    renderPlan(data.draft || curDraft, { pulse: false });
+  } catch (err) { add("bot", err.message); if (btn) { btn.disabled = false; btn.textContent = "Push to Garmin"; } }
+}
+
 async function send(text) {
   removeHero();
   add("me", text); t.value = "";
   const busy = typing();
+  const scoped = scopeDate;
   try {
-    const data = await api("/chat/message", { text });
+    const data = await api("/chat/message", scoped ? { text, scope_date: scoped } : { text });
     settle(busy, data.reply);
     if (data.today) serverToday = data.today;
+    if (data.push_status) curPushStatus = data.push_status;
     if (data.draft !== null && data.draft !== undefined) renderPlan(data.draft, { focus: true });
   } catch (err) { settle(busy, err.message); }
 }
@@ -553,6 +735,7 @@ async function load() {
     if (!r.ok) { add("bot", s.detail || "error"); return; }
     curReadiness = s.readiness || null;
     curPain = s.pain || null;
+    curPushStatus = s.push_status || {};
     serverToday = s.today || serverToday;
     if (!s.history.length) showHero();
     for (const m of s.history) add(m.role === "user" ? "me" : "bot", m.content);
@@ -569,6 +752,8 @@ pushBtn.addEventListener("click", async () => {
   try {
     const data = await api("/chat/approve", {});
     add("bot", data.summary);
+    if (data.push_status) curPushStatus = data.push_status;
+    if (data.draft) renderPlan(data.draft, { pulse: false });
     pushBtn.classList.remove("syncing"); pushBtn.textContent = "Push to Garmin";
     planStatus.textContent = "On watch · synced " + nowHM();
   } catch (err) {
@@ -598,4 +783,6 @@ load();
 @app.get("/chat", response_class=HTMLResponse)
 def chat_page(key: str = "") -> str:
     _check_key(key)
-    return CHAT_PAGE
+    # The manifest link needs the key at render time (it can't be added later —
+    # the browser reads it when the user taps "Add to Home Screen").
+    return CHAT_PAGE.replace("__MANIFEST_HREF__", f"/manifest.webmanifest?key={quote(key)}")

@@ -69,5 +69,12 @@ uvicorn jim.app:app --reload      # local service; chat at /chat?key=<CHAT_SECRE
 python scripts/backfill.py 90     # backfill Garmin history into Postgres
 ```
 
-Deploy: `render.yaml` (web service + one nightly cron; secrets via the
-`jim-secrets` env group). Cron schedule is UTC — see the comment there.
+## Deploy
+
+**[DEPLOY.md](DEPLOY.md)** — one Render blueprint (`render.yaml`) creates
+Postgres + the web service + the nightly cron; migrations run on boot. Then
+install the chat to your phone's home screen as a PWA.
+
+Two things that bite if you skip the guide: a container can't do a Garmin SSO
+login (no stdin for MFA), so it authenticates from a `GARMIN_TOKENS` session blob
+(`python scripts/garmin_login.py --export`); and the cron `schedule` is UTC.

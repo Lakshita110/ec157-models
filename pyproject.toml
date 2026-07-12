@@ -20,6 +20,8 @@ dependencies = [
 dev = [
     "ruff>=0.5",
     "pytest>=8.0",
+    "pillow>=10.0",   # scripts/make_icon.py only — icons are committed, so the
+                      # app never imports it at runtime (Render needs no fonts)
 ]
 
 [build-system]
@@ -28,6 +30,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# Home-screen icons are served by the app, so they must ship with the package.
+[tool.setuptools.package-data]
+jim = ["static/*.png"]
 
 [tool.ruff]
 line-length = 100

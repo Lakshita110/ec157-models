@@ -5,7 +5,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from jim.tools.notion import parse_knee_log_page, parse_task_page
+from jim.tools.notion import parse_knee_log_page
 
 DAY = date(2026, 7, 6)
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "knee_log_page.json").read_text())
@@ -52,11 +52,16 @@ def test_parse_knee_log_page_tolerates_missing_properties():
     assert parsed.pain_location == ""
 
 
-def test_parse_task_page():
+def test_fractional_day_score_is_not_truncated():
+    """`day score` is a Notion formula returning a fraction — int() used to
+    silently flatten every partial day (0.5) to 0."""
     page = {
         "properties": {
-            "task": {"type": "title", "title": [{"plain_text": "PT appointment"}]}
+            "day score": {"type": "formula", "formula": {"type": "number", "number": 0.5}}
         }
     }
-    assert parse_task_page(page) == "PT appointment"
-    assert parse_task_page({"properties": {}}) == ""
+    assert parse_knee_log_page(page, DAY).day_score == 0.5
+
+
+def test_missing_day_score_stays_none():
+    assert parse_knee_log_page({"properties": {}}, DAY).day_score is None

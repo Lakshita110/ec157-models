@@ -39,9 +39,10 @@ until you hit Push to Garmin**.
 
 ## Notion's role
 
-Read-only. Jim reads the habits/knee log and tasks as context; it never
-writes to Notion. The earlier `training check-in` and `training proposals`
-databases are dormant — delete them in Notion whenever you like.
+Read-only, and only the habits/knee log. Jim never writes to Notion, and does
+not read Notion tasks — scheduling context comes from Garmin. The `tasks `,
+`training check-in`, and `training proposals` databases are dormant — delete
+them in Notion whenever you like.
 
 ## Cost discipline
 

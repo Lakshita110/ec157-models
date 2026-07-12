@@ -65,13 +65,14 @@ def sync_today() -> None:
                 except Exception:
                     log.exception("exercise sets fetch failed for %s", act.activity_id)
         conn.execute(
-            "INSERT INTO notion_daily_log (day, pain_level, pain_location, pt_done,"
-            " habits, day_score) VALUES (%s, %s, %s, %s, %s, %s)"
+            "INSERT INTO notion_daily_log (day, pain_level, pain_location, pain_notes,"
+            " pt_done, habits, day_score) VALUES (%s, %s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (day) DO UPDATE SET pain_level=EXCLUDED.pain_level,"
-            " pain_location=EXCLUDED.pain_location, pt_done=EXCLUDED.pt_done,"
-            " habits=EXCLUDED.habits, day_score=EXCLUDED.day_score",
-            (today, notion.pain_level, notion.pain_location, notion.pt_done,
-             json.dumps(notion.habits), notion.day_score),
+            " pain_location=EXCLUDED.pain_location, pain_notes=EXCLUDED.pain_notes,"
+            " pt_done=EXCLUDED.pt_done, habits=EXCLUDED.habits,"
+            " day_score=EXCLUDED.day_score",
+            (today, notion.pain_level, notion.pain_location, notion.pain_notes,
+             notion.pt_done, json.dumps(notion.habits), notion.day_score),
         )
         conn.commit()
 

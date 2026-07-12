@@ -1,21 +1,23 @@
-"""Notion tools — READ ONLY. Notion is a data source (habits/knee log,
-tasks); all interaction happens in Jim's chat.
+"""Notion tools — READ ONLY. Notion is one data source: the habits/knee log.
+All interaction happens in Jim's chat.
 
-Wired to the real workspace schemas (resolves PLAN.md §12 Q1):
+Scheduling context comes from Garmin, not Notion — there is deliberately no
+tasks-DB integration here.
+
+Wired to the real workspace schema (resolves PLAN.md §12 Q1):
 
 - "habits db" (knee+habit log): title `name`, date `date`, number `pain level`,
   multi-select `knee pain` (mixes severity words none/mild/moderate/severe with
   locations left/right/ankles/hips/quads/shins), select `pain location`, text
   `pain notes`, checkbox `physical therapy`, habit checkboxes (cardio, reading,
   strength training, vitamins, dental care), formula `day score`.
-- "tasks ": title `task`, dates `do date` / `due date`, status `status`.
 
 `pain level` is often left blank; when it is, a numeric level is derived from
 the severity word in `knee pain` (none=0, mild=2, moderate=5, severe=8) so the
 off-heuristic always has a number to work with."""
 
 import logging
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from jim.config import settings
@@ -31,12 +33,6 @@ PROP_PAIN_LOCATION = "pain location"
 PROP_PAIN_NOTES = "pain notes"
 PROP_PT = "physical therapy"
 PROP_DAY_SCORE = "day score"
-
-# tasks db property names
-PROP_TASK_TITLE = "task"
-PROP_DO_DATE = "do date"
-PROP_DUE_DATE = "due date"
-PROP_STATUS = "status"
 
 SEVERITY_TO_LEVEL = {"none": 0, "mild": 2, "moderate": 5, "severe": 8}
 SEVERITY_WORDS = frozenset(SEVERITY_TO_LEVEL)
@@ -115,6 +111,8 @@ def parse_knee_log_page(page: dict[str, Any], day: date) -> NotionDay:
         for name, prop in page.get("properties", {}).items()
         if prop.get("type") == "checkbox" and name != PROP_PT
     }
+    # `day score` is a Notion formula that returns a FRACTION (e.g. 0.5) — keep
+    # it a float. Coercing to int silently truncated every partial day to 0.
     score = _number(page, PROP_DAY_SCORE)
     return NotionDay(
         day=day,
@@ -123,50 +121,19 @@ def parse_knee_log_page(page: dict[str, Any], day: date) -> NotionDay:
         pain_notes=_text(page, PROP_PAIN_NOTES),
         pt_done=_checkbox(page, PROP_PT),
         habits=habits,
-        day_score=int(score) if score is not None else None,
+        day_score=float(score) if score is not None else None,
     )
-
-
-def parse_task_page(page: dict[str, Any]) -> str:
-    return _text(page, PROP_TASK_TITLE)
 
 
 # --- tool contracts (PLAN.md §7) -------------------------------------------
 
 
 def get_notion_logs(day: date) -> NotionDay:
-    """Pain level/location, PT adherence, habits, and tomorrow's planned tasks."""
+    """Pain level/location, PT adherence, and habits for `day`."""
     cfg = settings()
-
-    log_rows = _query(
+    rows = _query(
         cfg.notion_knee_log_db_id,
         filter={"property": PROP_DATE, "date": {"equals": day.isoformat()}},
         page_size=1,
     ).get("results", [])
-    result = (
-        parse_knee_log_page(log_rows[0], day) if log_rows else NotionDay(day=day)
-    )
-
-    tomorrow = (day + timedelta(days=1)).isoformat()
-    # The tasks DB is optional scheduling context; if it isn't shared with the
-    # integration, degrade to no tasks rather than blanking the whole read.
-    try:
-        task_rows = _query(
-            cfg.notion_tasks_db_id,
-            filter={
-                "and": [
-                    {
-                        "or": [
-                            {"property": PROP_DO_DATE, "date": {"equals": tomorrow}},
-                            {"property": PROP_DUE_DATE, "date": {"equals": tomorrow}},
-                        ]
-                    },
-                    {"property": PROP_STATUS, "status": {"does_not_equal": "Done"}},
-                ]
-            },
-            page_size=20,
-        ).get("results", [])
-        result.tomorrow_tasks = [t for t in (parse_task_page(p) for p in task_rows) if t]
-    except Exception:
-        log.warning("notion tasks db unavailable; continuing without task context", exc_info=True)
-    return result
+    return parse_knee_log_page(rows[0], day) if rows else NotionDay(day=day)

@@ -41,12 +41,17 @@ class Settings(BaseSettings):
 
     garmin_email: str = ""
     garmin_password: str = ""
+    # Cached Garmin session tokens as a JSON blob (see scripts/garmin_login.py
+    # --export). Required in a container: the token cache at ~/.garminconnect is
+    # ephemeral there, and a fresh SSO login would prompt for MFA on a stdin that
+    # doesn't exist. When set, this is used instead of the on-disk token store.
+    garmin_tokens: str = ""
 
     notion_token: str = ""
-    # Real database IDs discovered from the workspace (overridable via env).
-    # Notion is READ-ONLY: "habits db" (knee+habit log) and "tasks ".
+    # Real database ID discovered from the workspace (overridable via env).
+    # Notion is READ-ONLY and only supplies the "habits db" (knee+habit log);
+    # scheduling context comes from Garmin, so there is no tasks DB.
     notion_knee_log_db_id: str = "b872f62a28604573980e983be6fd3143"
-    notion_tasks_db_id: str = "6843311f33194f40b65ea7e7c0f47436"
 
     openrouter_api_key: str = ""
     tavily_api_key: str = ""
