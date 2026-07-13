@@ -350,13 +350,19 @@ def test_format_duration_prefers_minutes_over_long_second_counts():
     assert format_duration(None) == "0s"
 
 
-def test_system_prompt_states_the_volume_budget():
-    """Left to infer the budget, the model overshoots and wastes a revision round
-    being told a number it could have had up front."""
+def test_system_prompt_carries_balance_guidance_not_a_volume_budget():
+    """Balance is advice, so it only works if it reaches the model as context."""
     f = Fakes([{"reply": "ok", "draft": None, "goals": None}])
-    f.state["features"] = {"as_of": "2026-07-12", "window_days": 28,
-                           "weekly_volume_min": 400, "days_since_legs": None}
     converse("plan my week", f.deps())
     system = f.llm_calls[0][0]["content"]
-    assert "470 minutes" in system          # 400 * 1.1 + 30
-    assert "WEEKLY allowance" in system
+    assert "NO weekly minute budget" in system
+    assert "legs, push, pull, core and conditioning" in system
+
+
+def test_system_prompt_shows_the_current_draft_skew():
+    f = Fakes([{"reply": "ok", "draft": None, "goals": None}])
+    f.kv["draft"] = [day(f"2026-07-{9 + i:02d}", title="Push") for i in range(3)]
+    converse("how's my week look", f.deps())
+    system = f.llm_calls[0][0]["content"]
+    assert "Current draft: push 100%" in system
+    assert "nothing for legs" in system

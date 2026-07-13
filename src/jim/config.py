@@ -17,10 +17,17 @@ CRON_LOCAL_HOUR = 21
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # --- Guardrail bounds (validate.py) ---------------------------------------
+# Hard rules are SAFETY only — they reject a day. Everything else (balance) is
+# advice fed back to the coach: an unbalanced week is suboptimal, not dangerous,
+# and silently dropping days is worse than letting a skewed plan through.
 GARMIN_MAX_STEPS = 50  # Garmin rejects workouts beyond ~50 steps
-MAX_WEEKLY_VOLUME_MIN = 600  # minutes/week hard ceiling
-MAX_SESSION_MIN = 120
-MAX_LOAD_PROGRESSION = 0.10  # max +10% week-over-week volume jump
+MAX_SESSION_MIN = 120  # a day's cap; there is deliberately no weekly volume cap
+
+# Balance targets (advisory). Measured across LOADING work only — mobility/PT is
+# meant to happen daily and would otherwise swamp the split.
+BALANCE_GROUPS = ("legs", "push", "pull", "core", "conditioning")
+BALANCE_MAX_SHARE = 0.50  # no single group should own more than half the plan
+BALANCE_MIN_SESSIONS = 3  # fewer loading days than this is too short to judge
 # Movements that violate current knee/ankle constraints. Lowercase substrings
 # matched against exercise names. Extend as PT protocol evolves.
 FORBIDDEN_EXERCISES = (

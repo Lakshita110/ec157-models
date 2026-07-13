@@ -24,8 +24,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from jim.agent.validate import validate_plan, weekly_budget
+from jim.agent.validate import balance_notes, plan_balance, validate_plan
 from jim.config import (
+    BALANCE_MAX_SHARE,
     FORBIDDEN_EXERCISES,
     MAX_SESSION_MIN,
     MIN_DAYS_BETWEEN_LEG_SESSIONS,
@@ -379,10 +380,23 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
     today = deps.now().date()
     goals = deps.kv_get("goals") or "(no long-term goals recorded yet)"
     draft = deps.kv_get("draft") or []
-    # Spell out the volume budget the validator will enforce. Left to infer it,
-    # the model guesses, overshoots, and burns a revision round being told the
-    # number it could have had up front.
-    budget = weekly_budget(_features(state, today))
+    # Balance is advice, not a hard rule — so it has to reach the model as
+    # context. Show it the current draft's split and what's skewed about it.
+    sessions = _parse_draft(draft, today)
+    balance = plan_balance(sessions)
+    notes = balance_notes(sessions)
+    balance_block = "# BALANCE\nSpread the loading work evenly across legs, push," \
+        " pull, core and conditioning — no single one should own more than" \
+        f" {BALANCE_MAX_SHARE:.0%} of the plan. Mobility/PT sits outside this and" \
+        " can run daily. There is NO weekly minute budget: keep each day under" \
+        f" {MAX_SESSION_MIN} min and plan as many days as the athlete asks for.\n"
+    if balance:
+        balance_block += "Current draft: " + ", ".join(
+            f"{g} {s:.0%}" for g, s in sorted(balance.items(), key=lambda x: -x[1])
+        ) + "\n"
+    if notes:
+        balance_block += "Skew to fix: " + "; ".join(notes)
+
     parts = [
         SYSTEM_PROMPT.format(
             forbidden=", ".join(FORBIDDEN_EXERCISES),
@@ -391,9 +405,7 @@ def _system_prompt(deps: CoachDeps, state: dict) -> str:
             max_days=DRAFT_MAX_DAYS,
             today=today.isoformat(),
         ),
-        f"# VOLUME BUDGET\nThe whole plan may total at most {budget:.0f} minutes"
-        " across all its days combined (this is a WEEKLY allowance, not a per-day"
-        " one). Rest days cost nothing. Size the week to fit inside it.",
+        balance_block,
         "# TODAY'S STATE\n" + json.dumps(state),
         "# LONG-TERM GOALS\n" + goals,
         "# CURRENT DRAFT\n" + (json.dumps(draft) if draft else "(empty)"),
@@ -490,8 +502,8 @@ def converse(text: str, deps: CoachDeps | None = None,
                     by_date[s.for_date.isoformat()] = s
                 return [by_date[k] for k in sorted(by_date)][:DRAFT_MAX_DAYS]
 
-            # Validate the merged plan — that's what gets saved, and the weekly
-            # budget only means anything across the whole week.
+            # Validate the merged plan — that's what gets saved, and leg spacing
+            # only means anything when the days are seen together.
             plan = merge(_parse_draft(out["draft"], today))
             violations = validate_plan(plan, features)
             if violations:

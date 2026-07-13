@@ -1,6 +1,12 @@
 from datetime import date, timedelta
 
-from jim.agent.validate import fallback_session, validate, validate_plan, weekly_budget
+from jim.agent.validate import (
+    balance_notes,
+    fallback_session,
+    plan_balance,
+    validate,
+    validate_plan,
+)
 from jim.schemas import ExerciseStep, HistoryFeatures, StructuredSession
 
 FOR_DATE = date(2026, 7, 7)
@@ -43,17 +49,14 @@ def test_session_too_long_rejected():
     assert not validate(session(est_duration_min=180), features()).ok
 
 
-def test_weekly_volume_cap():
-    result = validate(session(est_duration_min=90), features(weekly_volume_min=550))
-    assert not result.ok
-    assert any("weekly volume" in v for v in result.violations)
-
-
-def test_progression_too_steep():
-    # 100 min existing, +60 min proposed = 60% jump >> 10% + 30min allowance
-    result = validate(session(est_duration_min=90), features(weekly_volume_min=100))
-    assert not result.ok
-    assert any("progression" in v for v in result.violations)
+def test_no_weekly_volume_rule():
+    """There is deliberately no weekly cap or progression limit. Capping total
+    weekly minutes was a crude proxy that mostly punished normal training: as a
+    *weekly* number checked per-day, it rejected any session over ~10% of last
+    week's total. Session length is the cap that matters."""
+    heavy = session(est_duration_min=90)
+    assert validate(heavy, features(weekly_volume_min=550)).ok
+    assert validate(heavy, features(weekly_volume_min=100)).ok
 
 
 def test_leg_day_spacing_enforced():
@@ -83,36 +86,18 @@ def week(*specs) -> list[StructuredSession]:
     ]
 
 
-def test_a_normal_week_is_buildable():
-    """The bug the athlete hit: validate() judges ONE session against the
-    trailing week, so per-day it demanded every single session fit inside last
-    week's 10% headroom — on a 340-min base, any day over ~64 min. Days kept
-    getting dropped and a full Mon-Fri plan was impossible to build."""
+def test_a_full_week_is_buildable_at_any_volume():
+    """The bug the athlete hit: a weekly minute budget, checked per-day, made a
+    full Mon-Fri plan impossible to build. Volume alone must never reject a day."""
     f = features(weekly_volume_min=340, days_since_legs=None)
     plan = week(
         (0, 75, "PT protocol"), (1, 50, "Bench press"), (2, 60, "PT protocol"),
         (3, 50, "Lat pulldown"), (4, 40, "Hip mobility flow"),
     )
-    assert sum(s.est_duration_min for s in plan) == 275
-    assert validate_plan(plan, f) == {}          # 275 min fits the 404-min budget
+    assert validate_plan(plan, f) == {}
 
-    # ...while the old per-day rule rejected a 75-min day the week easily affords,
-    # by testing it as "last week's 340 + this one day" against a weekly budget.
-    assert not validate(plan[0], f).ok
-    assert "progression too steep" in validate(plan[0], f).violations[0]
-
-
-def test_planned_days_accumulate_against_the_weekly_budget():
-    """The other half of the bug: per-day checks never accumulated, so a week of
-    seven 90-minute sessions sailed through."""
-    f = features(weekly_volume_min=340, days_since_legs=None)
-    plan = week(*[(i, 90, "Bench press") for i in range(7)])
-    violations = validate_plan(plan, f)
-    assert violations                              # 630 min blows the 404 budget
-    # the early days fit; the days that overspend it are the ones flagged
-    assert "2026-07-07" not in violations
-    assert "2026-07-13" in violations
-    assert "budget" in violations["2026-07-13"][0]
+    # even seven long days: length is capped per-day, not per-week
+    assert validate_plan(week(*[(i, 110, "Bench press") for i in range(7)]), f) == {}
 
 
 def test_planned_leg_days_space_against_each_other():
@@ -126,35 +111,75 @@ def test_planned_leg_days_space_against_each_other():
 
 
 def test_planned_leg_day_still_spaces_against_history():
-    f = features(weekly_volume_min=340, days_since_legs=0)   # trained legs today
+    f = features(days_since_legs=0)   # trained legs today
     plan = week((1, 45, "Barbell squat"))
     assert "2026-07-08" in validate_plan(plan, f)
 
 
-def test_rest_days_do_not_spend_the_budget():
-    f = features(weekly_volume_min=340, days_since_legs=None)
-    plan = week((0, 60, "PT protocol")) + [
-        session(for_date=date(2026, 7, 8), kind="rest", est_duration_min=0, steps=[])
-    ]
-    assert validate_plan(plan, f) == {}
-
-
-def test_no_history_budgets_the_ceiling_not_thirty_minutes():
-    """A 0-minute baseline would otherwise budget 0*1.1+30 = 30 min/week and
-    reject every plan a new athlete could make."""
-    f = features(weekly_volume_min=0, days_since_legs=None)
-    assert weekly_budget(f) == 600
-    assert validate_plan(week((0, 60, "PT protocol")), f) == {}
-
-
-def test_plan_budget_never_exceeds_the_hard_ceiling():
-    f = features(weekly_volume_min=5000, days_since_legs=None)
-    assert weekly_budget(f) == 600
-
-
 def test_per_session_rules_still_apply_inside_a_plan():
-    f = features(weekly_volume_min=340, days_since_legs=None)
+    f = features(days_since_legs=None)
     plan = week((0, 45, "Box jump"), (1, 200, "Bench press"))
     violations = validate_plan(plan, f)
     assert "forbidden" in violations["2026-07-07"][0]
     assert any("exceeds max" in v for v in violations["2026-07-08"])
+
+
+# --- balance (advisory) -----------------------------------------------------
+
+
+def test_plan_balance_splits_loading_work_by_group():
+    plan = week((0, 60, "Barbell squat"), (1, 60, "Bench press"), (2, 60, "Lat pulldown"))
+    assert plan_balance(plan) == {"legs": 0.333, "push": 0.333, "pull": 0.333}
+
+
+def test_mobility_and_rest_sit_outside_the_balance():
+    """PT is ~70% of this athlete's logged volume and is meant to run daily —
+    counting it would swamp every split."""
+    plan = week((0, 60, "Bench press")) + [
+        session(for_date=date(2026, 7, 8), kind="mobility",
+                steps=[ExerciseStep(exercise="Hip mobility flow", sets=1)],
+                est_duration_min=90),
+        session(for_date=date(2026, 7, 9), kind="rest", steps=[], est_duration_min=0),
+    ]
+    assert plan_balance(plan) == {"push": 1.0}
+
+
+def test_conditioning_counts_as_its_own_group():
+    plan = [
+        session(for_date=date(2026, 7, 7), kind="conditioning",
+                steps=[ExerciseStep(exercise="Easy spin", sets=1)], est_duration_min=30),
+        session(for_date=date(2026, 7, 8), est_duration_min=30,
+                steps=[ExerciseStep(exercise="Bench press", sets=3, reps=8)]),
+    ]
+    assert plan_balance(plan) == {"conditioning": 0.5, "push": 0.5}
+
+
+def test_balance_notes_flag_a_dominant_group():
+    plan = week((0, 60, "Bench press"), (1, 60, "Shoulder press"), (2, 30, "Lat pulldown"))
+    notes = balance_notes(plan)
+    assert any("push is 80%" in n for n in notes)
+    assert any("nothing for legs" in n for n in notes)
+
+
+def test_balance_notes_are_quiet_on_a_balanced_plan():
+    plan = week(
+        (0, 45, "Barbell squat"), (1, 45, "Bench press"),
+        (2, 45, "Lat pulldown"), (3, 45, "Plank"),
+    ) + [session(for_date=date(2026, 7, 11), kind="conditioning",
+                 steps=[ExerciseStep(exercise="Easy spin", sets=1)], est_duration_min=45)]
+    assert balance_notes(plan) == []
+
+
+def test_balance_stays_quiet_on_short_plans():
+    """One day is *supposed* to be one-sided; nagging would make the coach pad
+    every single session."""
+    assert balance_notes(week((0, 60, "Bench press"))) == []
+    assert balance_notes(week((0, 60, "Bench press"), (1, 60, "Shoulder press"))) == []
+
+
+def test_balance_never_rejects_a_day():
+    """The whole point: skew is advice, not a violation."""
+    f = features(days_since_legs=None)
+    all_push = week((0, 60, "Bench press"), (1, 60, "Shoulder press"), (2, 60, "Bench dip"))
+    assert balance_notes(all_push)          # it IS skewed...
+    assert validate_plan(all_push, f) == {}  # ...and no day is dropped for it

@@ -3,19 +3,33 @@
 Rejecting returns the violations so the agent can revise once, then fall back
 to a conservative session. No LLM involvement: these are hard constraints.
 
-Two entrypoints:
-- `validate` judges ONE session against the trailing week (the nightly job).
-- `validate_plan` judges a multi-day draft as a set (the chat coach), which is
-  a different question — see its docstring."""
+There is deliberately NO weekly volume cap. Capping total minutes per week is a
+crude proxy for "don't overdo it" that mostly punished normal training: because
+the budget was a weekly number, checking it per-day rejected any session over
+~10% of last week's total, and a full week became impossible to build. What
+matters is that each day is a sane length and the work is spread over the body.
 
+So the rules split in two:
+- HARD (reject a day): session length, forbidden movements, Garmin's step cap,
+  and leg-day spacing — the knee constraints.
+- ADVISORY (`balance_notes`): how the plan is distributed across legs/push/pull/
+  core/conditioning. An unbalanced week is suboptimal, not dangerous, and
+  silently dropping days is worse than letting a skewed plan through — so this
+  is fed back to the coach as guidance instead of rejecting anything.
+
+Entrypoints: `validate` (one session, the nightly job) and `validate_plan` (a
+multi-day draft, the chat coach)."""
+
+from collections import Counter
 from datetime import date, timedelta
 
 from jim.config import (
+    BALANCE_GROUPS,
+    BALANCE_MAX_SHARE,
+    BALANCE_MIN_SESSIONS,
     FORBIDDEN_EXERCISES,
     GARMIN_MAX_STEPS,
-    MAX_LOAD_PROGRESSION,
     MAX_SESSION_MIN,
-    MAX_WEEKLY_VOLUME_MIN,
     MIN_DAYS_BETWEEN_LEG_SESSIONS,
 )
 from jim.schemas import HistoryFeatures, StructuredSession, ValidationResult
@@ -53,33 +67,9 @@ def is_leg_session(session: StructuredSession) -> bool:
     )
 
 
-def weekly_budget(features: HistoryFeatures) -> float:
-    """Minutes the coming week may total: last week +10%, under the hard ceiling.
-
-    With no trailing history there is nothing to progress from, so only the
-    ceiling applies (a 0-minute baseline would otherwise budget 30 min/week and
-    block every plan)."""
-    if features.weekly_volume_min <= 0:
-        return float(MAX_WEEKLY_VOLUME_MIN)
-    progression = features.weekly_volume_min * (1 + MAX_LOAD_PROGRESSION) + 30
-    return min(progression, float(MAX_WEEKLY_VOLUME_MIN))
-
-
 def validate(session: StructuredSession, features: HistoryFeatures) -> ValidationResult:
-    """One session against the trailing week — the nightly next-day suggestion."""
+    """One session — the nightly next-day suggestion."""
     violations = _session_violations(session)
-
-    # Weekly volume in bounds, including sane week-over-week progression.
-    projected = features.weekly_volume_min + session.est_duration_min
-    if projected > MAX_WEEKLY_VOLUME_MIN:
-        violations.append(
-            f"projected weekly volume {projected:.0f} min exceeds cap {MAX_WEEKLY_VOLUME_MIN}"
-        )
-    allowed = features.weekly_volume_min * (1 + MAX_LOAD_PROGRESSION) + 30
-    if features.weekly_volume_min > 0 and projected > allowed:
-        violations.append(
-            f"progression too steep: projected {projected:.0f} min vs allowed {allowed:.0f}"
-        )
 
     if (
         is_leg_session(session)
@@ -94,22 +84,75 @@ def validate(session: StructuredSession, features: HistoryFeatures) -> Validatio
     return ValidationResult(ok=not violations, violations=violations)
 
 
+# --- balance (advisory, never rejects) --------------------------------------
+
+
+def session_groups(session: StructuredSession) -> dict[str, float]:
+    """How one planned session's minutes split across the balance groups.
+
+    Mobility/PT and rest contribute nothing: PT is meant to run daily and would
+    otherwise dominate every split (it is ~70% of this athlete's logged volume).
+    A strength day is split by the muscles its steps actually hit."""
+    if session.kind in ("rest", "mobility"):
+        return {}
+    if session.kind == "conditioning":
+        return {"conditioning": 1.0}
+
+    counts = Counter(classify_muscle_group(step.exercise) for step in session.steps)
+    for group in list(counts):
+        if group not in BALANCE_GROUPS:
+            del counts[group]  # unrecognised movements don't get a vote
+    total = sum(counts.values())
+    if not total:
+        return {}
+    return {group: n / total for group, n in counts.items()}
+
+
+def plan_balance(sessions: list[StructuredSession]) -> dict[str, float]:
+    """Share of the plan's LOADING minutes per group (legs/push/pull/core/cardio)."""
+    totals: dict[str, float] = {}
+    for session in sessions:
+        for group, share in session_groups(session).items():
+            totals[group] = totals.get(group, 0.0) + session.est_duration_min * share
+    grand = sum(totals.values())
+    if grand == 0:
+        return {}
+    return {g: round(v / grand, 3) for g, v in totals.items()}
+
+
+def balance_notes(sessions: list[StructuredSession]) -> list[str]:
+    """Advice on how the plan is distributed — never a rejection.
+
+    Deliberately quiet on short plans: a single day is *supposed* to be one-sided,
+    and nagging about it would just make the coach pad every session."""
+    loading = [s for s in sessions if session_groups(s)]
+    if len(loading) < BALANCE_MIN_SESSIONS:
+        return []
+
+    balance = plan_balance(sessions)
+    notes: list[str] = []
+
+    for group, share in sorted(balance.items(), key=lambda x: -x[1]):
+        if share > BALANCE_MAX_SHARE:
+            notes.append(
+                f"{group} is {share:.0%} of the plan's loading work — over the"
+                f" {BALANCE_MAX_SHARE:.0%} target; spread it out"
+            )
+
+    missing = [g for g in BALANCE_GROUPS if g not in balance]
+    if missing:
+        notes.append("nothing for " + ", ".join(missing) + " in this plan")
+    return notes
+
+
 def validate_plan(
     sessions: list[StructuredSession], features: HistoryFeatures
 ) -> dict[str, list[str]]:
     """A multi-day draft judged as a set. Returns {for_date_iso: violations}.
 
-    Running the single-session `validate` once per day is wrong in both
-    directions. The week-over-week progression budget is a *weekly* allowance,
-    but per-day it gets re-tested as "last week's total + this one day" — so
-    every individual day has to fit inside last week's 10% headroom, which
-    rejects any normal session and makes a full week impossible to build.
-    Meanwhile the planned days never accumulate against each other, so a week of
-    seven 90-minute sessions passes untouched.
-
-    Here one weekly budget is spent across the plan in date order, and planned
-    leg days space against each other as well as against history."""
-    budget = weekly_budget(features)
+    Safety only. Balance is handled by `balance_notes`, which advises rather than
+    rejects. Planned leg days space against each other as well as against history
+    — checking only against history let two planned leg days sit back to back."""
     last_leg: date | None = (
         features.as_of - timedelta(days=features.days_since_legs)
         if features.days_since_legs is not None
@@ -117,16 +160,8 @@ def validate_plan(
     )
 
     results: dict[str, list[str]] = {}
-    spent = 0.0
     for session in sorted(sessions, key=lambda s: s.for_date):
         violations = _session_violations(session)
-
-        spent += session.est_duration_min
-        if spent > budget:
-            violations.append(
-                f"weekly volume budget exceeded: plan totals {spent:.0f} min"
-                f" vs allowed {budget:.0f}"
-            )
 
         if is_leg_session(session):
             if last_leg is not None:
