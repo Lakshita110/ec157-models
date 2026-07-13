@@ -24,7 +24,18 @@ _migrate_lock = threading.Lock()
 
 
 def connect() -> psycopg.Connection:
-    return psycopg.connect(settings().database_url, row_factory=dict_row)
+    url = settings().database_url
+    if not url:
+        # Otherwise psycopg tries to reach a local socket and every DB-backed
+        # route returns a bare 500, with nothing in the logs saying why. The app
+        # boots and authenticates fine without a database, so this is easy to
+        # misread as a code fault rather than a missing env var.
+        raise RuntimeError(
+            "DATABASE_URL is not set — the app cannot reach Postgres. On Vercel,"
+            " env vars only apply to deployments created after they were added,"
+            " so add it and redeploy."
+        )
+    return psycopg.connect(url, row_factory=dict_row)
 
 
 def ensure_migrated() -> None:
